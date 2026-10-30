@@ -12,6 +12,7 @@ image = modal.Image.debian_slim().pip_install("httpx", "pgvector", "psycopg2-bin
 def enrich_video(video_url: str, hero_images: list[str]) -> dict:
     import os
     import psycopg2
+    import psycopg2.extras
 
     video_hash = hashlib.sha256(video_url.encode()).hexdigest()
     # TODO: Muse Spark Open vision call here → summary + embedding
@@ -30,3 +31,18 @@ def enrich_video(video_url: str, hero_images: list[str]) -> dict:
     )
     conn.commit()
     return {"video_hash": video_hash, "status": "enriched"}
+
+
+@app.function(image=image, timeout=60)
+@modal.web_endpoint(method="POST", docs=True)
+def ingest(payload: dict) -> dict:
+    """Public HTTPS entry — Shopify webhook handler POSTs here (<100ms ack).
+
+    URL after `modal deploy` looks like:
+    https://<workspace>--reel2aicart-enrich-ingest.modal.run
+    Copy it into .env as MODAL_WEBHOOK_URL.
+    """
+    video_url = payload.get("video_url", "")
+    hero_images = payload.get("hero_images", [])
+    enrich_video.spawn(video_url, hero_images)
+    return {"ok": True, "spawned": bool(video_url)}
