@@ -52,5 +52,7 @@ Thumbs.db
 # --- Misc ---
 coverage/
 .cache/
+__pycache__/
+*.pyc
 tmp/
 temp/

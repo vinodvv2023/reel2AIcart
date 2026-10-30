@@ -5,7 +5,7 @@ import hashlib
 import modal
 
 app = modal.App("reel2aicart-enrich")
-image = modal.Image.debian_slim().pip_install("httpx", "pgvector", "psycopg2-binary")
+image = modal.Image.debian_slim().pip_install("fastapi[standard]", "httpx", "pgvector", "psycopg2-binary")
 
 
 @app.function(image=image, gpu="A10G", timeout=300, secrets=[modal.Secret.from_name("neon")])
@@ -34,7 +34,7 @@ def enrich_video(video_url: str, hero_images: list[str]) -> dict:
 
 
 @app.function(image=image, timeout=60)
-@modal.web_endpoint(method="POST", docs=True)
+@modal.fastapi_endpoint(method="POST", docs=True)
 def ingest(payload: dict) -> dict:
     """Public HTTPS entry — Shopify webhook handler POSTs here (<100ms ack).
 
