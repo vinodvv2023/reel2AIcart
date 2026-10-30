@@ -10,7 +10,7 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
 
   if (tool === "get_video_summary") {
     const videoId = url.searchParams.get("video_id") ?? "";
-    const rows = await sql`SELECT summary FROM video_cache WHERE video_id = ${videoId} LIMIT 1`;
+    const rows = (await sql`SELECT summary FROM video_cache WHERE video_id = ${videoId} LIMIT 1`) as { summary: unknown }[];
     return Response.json(rows[0] ?? { error: "not found" }, { status: rows.length ? 200 : 404 });
   }
 

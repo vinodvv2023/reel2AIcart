@@ -8,7 +8,7 @@ export function videoHash(videoUrl: string): string {
 
 export async function isNewVideo(videoUrl: string): Promise<boolean> {
   const sql = db();
-  const rows = await sql`
-    SELECT 1 FROM video_embeddings WHERE video_hash = ${videoHash(videoUrl)} LIMIT 1`;
+  const rows = (await sql`
+    SELECT 1 FROM video_embeddings WHERE video_hash = ${videoHash(videoUrl)} LIMIT 1`) as unknown[];
   return rows.length === 0;
 }
