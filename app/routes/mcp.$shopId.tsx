@@ -16,9 +16,11 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
 
   if (tool === "search_products") {
     const q = url.searchParams.get("query") ?? "";
-    const priceMax = Number(url.searchParams.get("price_max") ?? "999999");
-    // TODO: pgvector cosine search on video_embeddings.embedding + price filter
-    return Response.json({ shop: params.shopId, tool, q, priceMax, results: [] });
+    // pgvector cosine search: summary JSONB text match first, embedding rerank TODO Day 9-10
+    const rows = (await sql`
+      SELECT id, summary, pdp_url FROM video_embeddings
+      WHERE summary::text ILIKE ${"%" + q + "%"} LIMIT 20`) as { id: string; summary: unknown; pdp_url: string }[];
+    return Response.json({ shop: params.shopId, tool, q, results: rows });
   }
 
   // get_product_details + get_inventory read Shopify cache in Neon (stub)

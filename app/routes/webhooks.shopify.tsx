@@ -1,9 +1,17 @@
+import { createHmac } from "node:crypto";
 import type { ActionFunctionArgs } from "@remix-run/node";
 
 // PRD §5 + shopify.app.toml: 200 OK <100ms then enqueue to Modal. No long work here.
 export async function action({ request }: ActionFunctionArgs) {
   const topic = request.headers.get("x-shopify-topic") ?? "unknown";
-  // TODO Day 3-4: verify HMAC + fetch(`${MODAL_WEBHOOK_URL}/ingest`, {method:"POST", body})
-  await request.text().catch(() => "");
+  const raw = await request.text().catch(() => "");
+  const hmac = request.headers.get("x-shopify-hmac-sha256") ?? "";
+  const digest = createHmac("sha256", process.env.SHOPIFY_API_SECRET ?? "")
+    .update(raw, "utf8")
+    .digest("base64");
+  if (hmac && digest !== hmac) return Response.json({ error: "bad hmac" }, { status: 401 });
+  if (process.env.MODAL_WEBHOOK_URL) {
+    fetch(process.env.MODAL_WEBHOOK_URL, { method: "POST", body: raw }).catch(() => {});
+  }
   return Response.json({ ok: true, topic, enqueued: true });
 }

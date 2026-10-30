@@ -8,8 +8,25 @@ app = modal.App("reel2aicart-enrich")
 image = modal.Image.debian_slim().pip_install("httpx", "pgvector", "psycopg2-binary")
 
 
-@app.function(image=image, gpu="A10G", timeout=300)
+@app.function(image=image, gpu="A10G", timeout=300, secrets=[modal.Secret.from_name("neon")])
 def enrich_video(video_url: str, hero_images: list[str]) -> dict:
+    import os
+    import psycopg2
+
     video_hash = hashlib.sha256(video_url.encode()).hexdigest()
-    # TODO Day 3-4: call Muse Spark Open vision here, write to Neon video_embeddings + video_cache
-    return {"video_hash": video_hash, "status": "queued", "hero_images": len(hero_images)}
+    # TODO: Muse Spark Open vision call here → summary + embedding
+    summary = {"video_url": video_url, "hero_images": len(hero_images)}
+    conn = psycopg2.connect(os.environ["DATABASE_URL"])
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO video_embeddings (id, video_hash, summary) VALUES (%s,%s,%s)"
+        " ON CONFLICT (video_hash) DO NOTHING",
+        (video_hash, video_hash, psycopg2.extras.Json(summary)),
+    )
+    cur.execute(
+        "INSERT INTO video_cache (video_id, summary) VALUES (%s,%s)"
+        " ON CONFLICT (video_id) DO NOTHING",
+        (video_hash, psycopg2.extras.Json(summary)),
+    )
+    conn.commit()
+    return {"video_hash": video_hash, "status": "enriched"}
