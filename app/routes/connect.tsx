@@ -1,10 +1,11 @@
+import { json } from "@remix-run/node";
 import { useLoaderData } from "@remix-run/react";
 import { humanizeCommerceError } from "~/lib/shopify/commerce-errors";
 
 // PRD §5 Step 2: Connect IG Graph + YouTube Data API + Commerce health check.
 export async function loader() {
   const sample = "{{IE_30010}}";
-  return Response.json({ hint: humanizeCommerceError(sample) });
+  return json({ hint: humanizeCommerceError(sample) });
 }
 
 export default function Connect() {
