@@ -1,0 +1,24 @@
+{
+  "name": "reel2aicart",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Reel2AICart - Shoppable Video + Agent-Ready Commerce. From Reel to AI Cart in one click.",
+  "type": "module",
+  "scripts": {
+    "dev": "remix dev",
+    "build": "remix build",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@neondatabase/serverless": "^0.9.0",
+    "@reduxjs/toolkit": "^2.2.0",
+    "@remix-run/node": "^2.9.0",
+    "@remix-run/react": "^2.9.0",
+    "react": "^18.2.0",
+    "react-redux": "^9.1.0"
+  },
+  "devDependencies": {
+    "@remix-run/dev": "^2.9.0",
+    "typescript": "^5.4.0"
+  }
+}
