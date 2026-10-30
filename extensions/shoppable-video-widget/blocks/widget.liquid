@@ -1,0 +1,6 @@
+{# Reel2AICart shoppable widget — video left, products swap at timeline t (PRD §5 Step 5B) #}
+<div data-reel2aicart-widget data-video-id="{{ block.settings.video_id }}" style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+  <div data-r2ac-video></div>
+  <div data-r2ac-products></div>
+</div>
+{% schema %}{"name":"Reel2AICart Shoppable Video","settings":[{"type":"text","id":"video_id","label":"Video ID"}]}{% endschema %}
