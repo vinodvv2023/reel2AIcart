@@ -19,6 +19,8 @@
   },
   "devDependencies": {
     "@remix-run/dev": "^2.9.0",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
     "typescript": "^5.4.0"
   }
 }
