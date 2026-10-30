@@ -1,0 +1,9 @@
+/* Reel2AICart brand tokens — teal #0F4C4A + coral #FF7A5C (PRD §Brand) */
+:root {
+  --r2ac-teal: #0f4c4a;
+  --r2ac-coral: #ff7a5c;
+  --r2ac-bg: #fcfcf9;
+  --r2ac-surface: #ffffff;
+  --r2ac-ink: #141413;
+  --r2ac-line: #e8e2da;
+}
