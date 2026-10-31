@@ -33,7 +33,7 @@ def enrich_video(video_url: str, hero_images: list[str]) -> dict:
     return {"video_hash": video_hash, "status": "enriched"}
 
 
-@app.function(image=image, timeout=60)
+@app.function(image=image, timeout=60, secrets=[modal.Secret.from_name("neon")])
 @modal.fastapi_endpoint(method="POST", docs=True)
 def ingest(payload: dict) -> dict:
     """Public HTTPS entry — Shopify webhook handler POSTs here (<100ms ack).
