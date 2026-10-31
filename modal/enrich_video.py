@@ -44,5 +44,10 @@ def ingest(payload: dict) -> dict:
     """
     video_url = payload.get("video_url", "")
     hero_images = payload.get("hero_images", [])
+    if not video_url and not hero_images:
+        # Media-less product webhook — nothing to enrich, skip instead of
+        # writing junk rows. video_url arrives once product-media GraphQL
+        # (needs stored shop token) lands.
+        return {"ok": True, "spawned": False, "reason": "no media"}
     enrich_video.spawn(video_url, hero_images)
-    return {"ok": True, "spawned": bool(video_url)}
+    return {"ok": True, "spawned": bool(video_url or hero_images)}

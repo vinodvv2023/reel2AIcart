@@ -12,10 +12,32 @@ export async function action({ request }: ActionFunctionArgs) {
     .digest("base64");
   if (hmac && digest !== hmac) return json({ error: "bad hmac" }, { status: 401 });
   if (process.env.MODAL_WEBHOOK_URL) {
+    // Shape a minimal enrichment payload: product id + hero images.
+    // video_url needs product-media GraphQL + stored shop token (TODO) —
+    // until then Modal skips media-less payloads instead of writing junk rows.
+    let payload: Record<string, unknown> = {};
+    try {
+      const p = JSON.parse(raw) as {
+        id?: number;
+        image?: { src?: string };
+        images?: { src?: string }[];
+      };
+      const hero = [...(p.images ?? []).map((i) => i.src).filter(Boolean)];
+      if (p.image?.src && !hero.includes(p.image.src)) hero.unshift(p.image.src);
+      payload = {
+        shop: request.headers.get("x-shopify-shop-domain") ?? "",
+        topic,
+        product_id: p.id ?? null,
+        video_url: "",
+        hero_images: hero.slice(0, 3),
+      };
+    } catch {
+      payload = { topic, product_id: null, video_url: "", hero_images: [] };
+    }
     fetch(process.env.MODAL_WEBHOOK_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: raw,
+      body: JSON.stringify(payload),
     }).catch(() => {});
   }
   return json({ ok: true, topic, enqueued: true });
