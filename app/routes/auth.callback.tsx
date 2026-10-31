@@ -2,9 +2,9 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import type { LoaderFunctionArgs } from "@remix-run/node";
 import { json } from "@remix-run/node";
 import { useLoaderData } from "@remix-run/react";
+import { db } from "~/lib/db";
 
-// OAuth callback: verifies HMAC, exchanges code for a shop token.
-// Token persistence (shop table) is TODO — token is confirmed, not stored.
+// OAuth callback: verifies HMAC, exchanges code, upserts the shop token.
 function validHmac(params: URLSearchParams, secret: string): boolean {
   const hmac = params.get("hmac") ?? "";
   const pairs = [...params.entries()]
@@ -37,8 +37,12 @@ export async function loader({ request }: LoaderFunctionArgs) {
     body: JSON.stringify({ client_id: key, client_secret: secret, code }),
   });
   if (!res.ok) return json({ ok: false, error: `token exchange failed: ${res.status}` }, { status: 502 });
-  const { scope } = (await res.json()) as { scope?: string };
-  // TODO: persist access_token per shop (shop table) + trigger syncProducts.
+  const { access_token, scope } = (await res.json()) as { access_token?: string; scope?: string };
+  if (!access_token) return json({ ok: false, error: "no token returned" }, { status: 502 });
+  const sql = db();
+  await sql`INSERT INTO shops (shop, access_token, scopes)
+    VALUES (${shop}, ${access_token}, ${scope ?? ""})
+    ON CONFLICT (shop) DO UPDATE SET access_token = EXCLUDED.access_token, scopes = EXCLUDED.scopes, installed_at = NOW()`;
   return json({ ok: true, shop, scope: scope ?? "" });
 }
 

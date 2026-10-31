@@ -44,10 +44,56 @@ def ingest(payload: dict) -> dict:
     """
     video_url = payload.get("video_url", "")
     hero_images = payload.get("hero_images", [])
+    if not video_url:
+        # Resolve product video via Shopify product-media GraphQL using the
+        # stored shop token. Falls back to hero images when unavailable.
+        video_url = _product_video_url(
+            payload.get("shop", ""), payload.get("product_id")
+        )
     if not video_url and not hero_images:
-        # Media-less product webhook — nothing to enrich, skip instead of
-        # writing junk rows. video_url arrives once product-media GraphQL
-        # (needs stored shop token) lands.
         return {"ok": True, "spawned": False, "reason": "no media"}
     enrich_video.spawn(video_url, hero_images)
     return {"ok": True, "spawned": bool(video_url or hero_images)}
+
+
+def _product_video_url(shop: str, product_id) -> str:
+    """First external_video/media URL on the product, else ''."""
+    import os
+    import psycopg2
+
+    if not shop or not product_id:
+        return ""
+    conn = psycopg2.connect(os.environ["DATABASE_URL"])
+    cur = conn.cursor()
+    cur.execute("SELECT access_token FROM shops WHERE shop = %s", (shop,))
+    row = cur.fetchone()
+    conn.close()
+    if not row:
+        return ""
+    import httpx
+
+    query = """{ product(id: "%s") { media(first: 10) { edges {
+      node { ... on ExternalVideo { embeddedUrl originUrl }
+             ... on Video { sources { url } }
+             ... on MediaImage { image { url } } } } } } }""" % (
+        f"gid://shopify/Product/{product_id}"
+    )
+    try:
+        r = httpx.post(
+            f"https://{shop}/admin/api/2026-10/graphql.json",
+            headers={"X-Shopify-Access-Token": row[0], "Content-Type": "application/json"},
+            json={"query": query},
+            timeout=15,
+        )
+        edges = r.json()["data"]["product"]["media"]["edges"]
+    except Exception:
+        return ""
+    for e in edges:
+        node = e.get("node", {})
+        url = node.get("embeddedUrl") or node.get("originUrl") or ""
+        if url:
+            return url
+        for s in node.get("sources", []):
+            if s.get("url"):
+                return s["url"]
+    return ""

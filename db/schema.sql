@@ -18,3 +18,12 @@ CREATE TABLE IF NOT EXISTS video_cache (
   video_id TEXT PRIMARY KEY,
   summary JSONB NOT NULL
 );
+
+-- OAuth shop tokens (one row per installed shop). Written by /auth/callback,
+-- read by Modal to resolve product media. Never exposed to the client.
+CREATE TABLE IF NOT EXISTS shops (
+  shop TEXT PRIMARY KEY,
+  access_token TEXT NOT NULL,
+  scopes TEXT NOT NULL DEFAULT '',
+  installed_at TIMESTAMPTZ DEFAULT NOW()
+);
