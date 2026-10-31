@@ -9,11 +9,18 @@ image = modal.Image.debian_slim().pip_install("fastapi[standard]", "httpx", "pgv
 
 
 @app.function(image=image, gpu="A10G", timeout=300, secrets=[modal.Secret.from_name("neon")])
-def enrich_video(video_url: str, hero_images: list[str]) -> dict:
+def enrich_video(video_url: str, hero_images: list[str], shop: str = "", product_id=None) -> dict:
     import os
     import psycopg2
     import psycopg2.extras
 
+    if not video_url:
+        # Resolve product video via Shopify product-media GraphQL using the
+        # stored shop token. Runs here (not in ingest) because only this
+        # function reliably receives the neon secret.
+        video_url = _product_video_url(shop, product_id)
+    if not video_url and not hero_images:
+        return {"video_hash": "", "status": "skipped", "reason": "no media"}
     video_hash = hashlib.sha256(video_url.encode()).hexdigest()
     # TODO: Muse Spark Open vision call here → summary + embedding
     summary = {"video_url": video_url, "hero_images": len(hero_images)}
@@ -44,16 +51,10 @@ def ingest(payload: dict) -> dict:
     """
     video_url = payload.get("video_url", "")
     hero_images = payload.get("hero_images", [])
-    if not video_url:
-        # Resolve product video via Shopify product-media GraphQL using the
-        # stored shop token. Falls back to hero images when unavailable.
-        video_url = _product_video_url(
-            payload.get("shop", ""), payload.get("product_id")
-        )
-    if not video_url and not hero_images:
-        return {"ok": True, "spawned": False, "reason": "no media"}
-    enrich_video.spawn(video_url, hero_images)
-    return {"ok": True, "spawned": bool(video_url or hero_images)}
+    enrich_video.spawn(
+        video_url, hero_images, payload.get("shop", ""), payload.get("product_id")
+    )
+    return {"ok": True, "spawned": True}
 
 
 def _product_video_url(shop: str, product_id) -> str:
