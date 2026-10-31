@@ -12,7 +12,11 @@ export async function action({ request }: ActionFunctionArgs) {
     .digest("base64");
   if (hmac && digest !== hmac) return json({ error: "bad hmac" }, { status: 401 });
   if (process.env.MODAL_WEBHOOK_URL) {
-    fetch(process.env.MODAL_WEBHOOK_URL, { method: "POST", body: raw }).catch(() => {});
+    fetch(process.env.MODAL_WEBHOOK_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: raw,
+    }).catch(() => {});
   }
   return json({ ok: true, topic, enqueued: true });
 }
