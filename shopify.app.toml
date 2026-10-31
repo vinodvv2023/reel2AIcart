@@ -1,6 +1,8 @@
-name = "Reel2AICart - Shoppable Video to AI Cart"
+name = "Reel2AICart"
 handle = "reel2aicart"
 client_id = "440af85bd85a43647ef6eb17285200b0"
+application_url = "https://reel2-aicart.vercel.app"
+embedded = true
 
 [build]
 dev_store_url = ""
