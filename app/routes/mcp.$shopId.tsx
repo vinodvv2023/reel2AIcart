@@ -18,9 +18,23 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
 
   if (tool === "search_products") {
     const q = url.searchParams.get("query") ?? "";
-    // pgvector cosine rerank: query embedding vs stored video vectors.
-    // Falls back to JSONB text match when no vectors exist yet.
+    // Query embedding must use the SAME algorithm as the stored rows.
+    // bge (current rows) first, hash (legacy rows) second, text match last.
     if (q) {
+      const bge = await bgeQuery(q);
+      if (bge) {
+        try {
+          const ranked = (await sql`
+            SELECT id, summary, pdp_url, (embedding <=> ${bge}::vector) AS score
+            FROM video_embeddings WHERE summary->>'providers' IS NOT NULL
+              AND summary->'providers'->>'embed' = 'deepinfra-bge-v1'
+            ORDER BY embedding <=> ${bge}::vector LIMIT 20`) as unknown[];
+          if (ranked.length)
+            return json({ shop: params.shopId, tool, q, results: ranked, rerank: "cosine-bge-v1" });
+        } catch {
+          // vector query failed — fall through
+        }
+      }
       const vec = toVectorLiteral(textEmbedding(q));
       try {
         const ranked = (await sql`
@@ -39,6 +53,25 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
     return json({ shop: params.shopId, tool, q, results: rows, rerank: "text-fallback" });
   }
 
-  // get_product_details + get_inventory read Shopify cache in Neon (stub)
+  // bge query vector via DeepInfra (server-side; matches deepinfra-bge-v1 rows).
+// Null when DEEPINFRA_TOKEN is unset or the call fails — caller falls back.
+async function bgeQuery(text: string): Promise<string | null> {
+  const token = process.env.DEEPINFRA_TOKEN ?? "";
+  if (!token) return null;
+  try {
+    const res = await fetch("https://api.deepinfra.com/v1/openai/embeddings", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "BAAI/bge-large-en-v1.5", input: text }),
+    });
+    if (!res.ok) return null;
+    const j = (await res.json()) as { data: { embedding: number[] }[] };
+    return toVectorLiteral(j.data[0].embedding);
+  } catch {
+    return null;
+  }
+}
+
+// get_product_details + get_inventory read Shopify cache in Neon (stub)
   return json({ shop: params.shopId, tool, ok: true });
 }
