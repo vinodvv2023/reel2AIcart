@@ -25,7 +25,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
       { headers: { "X-Shopify-Access-Token": access_token } },
     );
     if (!res.ok) {
-      errors.push(`${shop}: shopify ${res.status}`);
+      const body = (await res.text().catch(() => "")).slice(0, 200);
+      errors.push(`${shop}: shopify ${res.status} ${body}`);
       continue;
     }
     const { orders } = (await res.json()) as {
