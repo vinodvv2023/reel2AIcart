@@ -3,3 +3,4 @@
 # (and the next `shopify app deploy`) recognize the extension at all.
 name = "Reel2AICart Shoppable Video"
 type = "theme"
+uid = "2b6c130d-aaff-9ad5-dc56-4a83aac00fefd4dae8f9"

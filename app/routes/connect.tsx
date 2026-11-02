@@ -19,7 +19,7 @@ async function igMedia(): Promise<{ reels: Reel[]; error: string | null }> {
     const r = await fetch(
       `https://graph.facebook.com/v19.0/${ig}/media?fields=id,caption,thumbnail_url,timestamp&limit=25&access_token=${token}`,
     );
-    if (!r.ok) return { reels: [], error: `IG API ${r.status} — token may be expired.` };
+    if (!r.ok) return { reels: [], error: `IG API ${r.status} - token may be expired.` };
     return { reels: ((await r.json()) as { data: Reel[] }).data ?? [], error: null };
   } catch {
     return { reels: [], error: "IG API unreachable." };
@@ -38,7 +38,7 @@ async function shopProducts(): Promise<{ products: Product[]; error: string | nu
       `https://${shops[0].shop}/admin/api/2026-10/products.json?limit=50&fields=id,title,image,variants`,
       { headers: { "X-Shopify-Access-Token": shops[0].access_token } },
     );
-    if (!r.ok) return { products: [], error: `Shopify API ${r.status} — re-authorize the store.` };
+    if (!r.ok) return { products: [], error: `Shopify API ${r.status} - re-authorize the store.` };
     const { products } = (await r.json()) as { products: Product[] };
     return { products, error: null };
   } catch {
@@ -47,23 +47,32 @@ async function shopProducts(): Promise<{ products: Product[]; error: string | nu
 }
 
 export async function loader({ request }: LoaderFunctionArgs) {
-  const q = new URL(request.url).searchParams.get("q") ?? "";
-  const productId = new URL(request.url).searchParams.get("product") ?? "";
+  const params = new URL(request.url).searchParams;
+  const q = params.get("q") ?? "";
+  const rq = params.get("rq") ?? "";
+  const productId = params.get("product") ?? "";
   const [{ reels, error: reelsError }, { products, error: productsError }] = await Promise.all([
     igMedia(),
     shopProducts(),
   ]);
+  const filteredReels = rq
+    ? reels.filter(
+        (r) =>
+          (r.caption ?? "").toLowerCase().includes(rq.toLowerCase()) || r.id.includes(rq),
+      )
+    : reels;
   const filtered = q
     ? products.filter((p) => p.title.toLowerCase().includes(q.toLowerCase()))
     : products;
   return json({
     hint: humanizeCommerceError("{{IE_30010}}"),
     ig: Boolean(process.env.META_GRAPH_TOKEN && process.env.IG_USER_ID),
-    reels,
+    reels: filteredReels,
     reelsError,
     products: filtered,
     productsError,
     q,
+    rq,
     productId,
   });
 }
@@ -107,7 +116,7 @@ const pick: React.CSSProperties = {
 };
 
 export default function Connect() {
-  const { hint, ig, reels, reelsError, products, productsError, q, productId } =
+  const { hint, ig, reels, reelsError, products, productsError, q, rq, productId } =
     useLoaderData<typeof loader>();
   const result = useActionData<typeof action>();
   const selected = products.find((p) => String(p.id) === productId);
@@ -117,42 +126,44 @@ export default function Connect() {
       <p role="status">{hint}</p>
       <p>
         Instagram <span style={badge(ig)}>{ig ? "connected" : "missing key"}</span>
-        {!ig && <small> — set META_GRAPH_TOKEN + IG_USER_ID in Vercel env</small>}
+        {!ig && <small> - set META_GRAPH_TOKEN + IG_USER_ID in Vercel env</small>}
       </p>
 
       <h2>1. Pick a reel</h2>
       {reelsError ? (
-        <>
-          <p role="alert" style={{ color: "#FF7A5C" }}>{reelsError}</p>
-          <p><small>Fallback: numeric media ID only works via the Graph API list — see “Finding a reel ID” below.</small></p>
-        </>
+        <p role="alert" style={{ color: "#FF7A5C" }}>{reelsError}</p>
       ) : (
-        <div role="radiogroup" aria-label="Recent reels">
-          {reels.map((reel) => (
-            <label key={reel.id} style={pick}>
-              <input type="radio" name="mediaId" value={reel.id} form="tagform" required />
-              {reel.thumbnail_url && (
-                <img src={reel.thumbnail_url} alt="" loading="lazy" style={thumb} />
-              )}
-              <span>
-                <strong>{reel.caption?.slice(0, 80) || "(no caption)"}</strong>
-                <br />
-                <small>
-                  {reel.id} · {reel.timestamp?.slice(0, 10)}
-                </small>
-              </span>
-            </label>
-          ))}
-        </div>
+        <>
+          <Form method="get" aria-label="Search reels">
+            <label htmlFor="rq">Search reels</label>{" "}
+            <input id="rq" name="rq" defaultValue={rq} placeholder="e.g. ballerina" />{" "}
+            <input type="hidden" name="q" value={q} />
+            <input type="hidden" name="product" value={productId} />
+            <button type="submit">Search</button>
+          </Form>
+          <div role="radiogroup" aria-label="Recent reels">
+            {reels.map((reel) => (
+              <label key={reel.id} style={pick}>
+                <input type="radio" name="mediaId" value={reel.id} form="tagform" required />
+                {reel.thumbnail_url && (
+                  <img src={reel.thumbnail_url} alt="" loading="lazy" style={thumb} />
+                )}
+                <span>
+                  <strong>{reel.caption?.slice(0, 80) || "(no caption)"}</strong>
+                  <br />
+                  <small>
+                    {reel.id} · {reel.timestamp?.slice(0, 10)}
+                  </small>
+                </span>
+              </label>
+            ))}
+            {reels.length === 0 && <p><small>No reels match this search.</small></p>}
+          </div>
+        </>
       )}
       <details style={{ marginTop: 8 }}>
         <summary>Finding a reel ID manually</summary>
-        <ol style={{ paddingLeft: 20, display: "grid", gap: 4 }}>
-          <li>Instagram does not show numeric media IDs anywhere in the app — the link you copy (instagram.com/reel/ABC123/) holds a shortcode, which this form cannot use.</li>
-          <li>Reliable path: open the Graph API list in your browser (signed in as the business account):<br />
-            <code>graph.facebook.com/v19.0/YOUR_IG_USER_ID/media?fields=id,caption,timestamp&amp;access_token=YOUR_TOKEN</code><br />
-            (both values are in Vercel env) and copy the <code>id</code> — or just use the picker above, which reads the same list.</li>
-        </ol>
+        <p>Instagram does not show numeric media IDs in the app - use the picker above, which lists your recent reels with thumbnails.</p>
       </details>
 
       <h2>2. Pick a product + variant</h2>
@@ -163,6 +174,7 @@ export default function Connect() {
           <Form method="get" aria-label="Search products">
             <label htmlFor="q">Search products</label>{" "}
             <input id="q" name="q" defaultValue={q} placeholder="e.g. gown" />{" "}
+            <input type="hidden" name="rq" value={rq} />{" "}
             <button type="submit">Search</button>
           </Form>
           {products.map((p) => (
@@ -173,7 +185,7 @@ export default function Connect() {
                 <br />
                 <small>{p.variants.length} variant(s)</small>
               </span>
-              <a href={`?q=${encodeURIComponent(q)}&product=${p.id}`}>Select</a>
+              <a href={`?q=${encodeURIComponent(q)}&rq=${encodeURIComponent(rq)}&product=${p.id}`}>Select</a>
             </div>
           ))}
           {selected && (
@@ -182,7 +194,7 @@ export default function Connect() {
               {selected.variants.map((v) => (
                 <label key={v.id} style={{ display: "block", marginTop: 6 }}>
                   <input type="radio" name="variantId" value={v.id} form="tagform" required />{" "}
-                  {v.title} — ${v.price} <small>({v.id})</small>
+                  {v.title} - ${v.price} <small>({v.id})</small>
                 </label>
               ))}
             </fieldset>
@@ -196,7 +208,7 @@ export default function Connect() {
       </Form>
       {result && (
         <p role={result.ok ? "status" : "alert"} style={{ color: result.ok ? "#0F4C4A" : "#FF7A5C" }}>
-          {result.ok ? `Tagged reel ${result.mediaId} ✓ — check the reel on mobile for View Products.` : result.error}
+          {result.ok ? `Tagged reel ${result.mediaId} ✓ - check the reel on mobile for View Products.` : result.error}
         </p>
       )}
     </main>
