@@ -63,7 +63,7 @@ export default function Home() {
         </div>
       </section>
       <p style={{ marginTop: 16 }}>
-        <a href="/connect" style={{ color: "#FF7A5C" }}>Connect Instagram + YouTube →</a>
+        <a href="/connect" style={{ color: "#FF7A5C" }}>Connect Instagram →</a>
         {" · "}
         <a href={`/auth/login?shop=${encodeURIComponent(shop)}`} target="_top">Reconnect store →</a>
       </p>
