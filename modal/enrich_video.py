@@ -1,14 +1,22 @@
 """PRD L2 Enrichment — runs ONCE per new video hash on Modal A10G.
 Input: video_url + 3 hero image urls. Output: JSON + embedding → Neon.
-Online path never calls this; agents hit video_cache instead ($0 vs $0.30)."""
+Online path never calls this; agents hit video_cache instead ($0 vs $0.30).
+
+Provider switch (no code change to flip): Modal secret "app-config" holds
+VISION_PROVIDER (muse|gemini) + EMBED_PROVIDER (muse|deepinfra|hash).
+Keys live in "meta" (META_API_KEY), "gemini", "deepinfra" secrets —
+create with placeholder values if unused; only the selected provider's
+key must be real. Hackathon default: muse/muse (Meta Model API)."""
 import hashlib
 import modal
 
 app = modal.App("reel2aicart-enrich")
 image = modal.Image.debian_slim().pip_install("fastapi[standard]", "httpx", "pgvector", "psycopg2-binary")
 
+SECRETS = [modal.Secret.from_name(n) for n in ("neon", "meta", "gemini", "deepinfra", "app-config")]
 
-@app.function(image=image, gpu="A10G", timeout=300, secrets=[modal.Secret.from_name("neon")])
+
+@app.function(image=image, gpu="A10G", timeout=300, secrets=SECRETS)
 def enrich_video(video_url: str, hero_images: list[str], shop: str = "", product_id=None) -> dict:
     import os
     import psycopg2
@@ -23,9 +31,11 @@ def enrich_video(video_url: str, hero_images: list[str], shop: str = "", product
         print(f"[enrich] skip shop={shop} product={product_id}: no media")
         return {"video_hash": "", "status": "skipped", "reason": "no media"}
     video_hash = hashlib.sha256(video_url.encode()).hexdigest()
-    summary = _build_summary(video_url, hero_images, shop, product_id)
-    embedding = _text_embedding(video_url + "|" + summary["text_seed"])
-    print(f"[enrich] shop={shop} product={product_id} provider={summary['provider']} dims={len(embedding)} looks={len(summary['timeline'])}")
+    vision, embed = _providers()
+    summary = _vision_summary(video_url, hero_images, shop, product_id, vision)
+    embedding, embed_tag = _embed_for(video_url + "|" + summary["text_seed"], embed)
+    summary["providers"] = {"vision": summary.pop("provider"), "embed": embed_tag}
+    print(f"[enrich] shop={shop} product={product_id} vision={summary['providers']['vision']} embed={embed_tag} dims={len(embedding)} looks={len(summary['timeline'])}")
     conn = psycopg2.connect(os.environ["DATABASE_URL"])
     cur = conn.cursor()
     vec = "[" + ",".join(f"{v:.6f}" for v in embedding) + "]"
@@ -41,7 +51,34 @@ def enrich_video(video_url: str, hero_images: list[str], shop: str = "", product
         (video_hash, psycopg2.extras.Json(summary)),
     )
     conn.commit()
-    return {"video_hash": video_hash, "status": "enriched", "provider": summary["provider"]}
+    return {"video_hash": video_hash, "status": "enriched", "providers": summary["providers"]}
+
+
+def _providers() -> tuple[str, str]:
+    """Selected providers from the app-config secret; hackathon default muse/muse."""
+    import os
+
+    return (os.environ.get("VISION_PROVIDER", "muse"), os.environ.get("EMBED_PROVIDER", "muse"))
+
+
+def _vision_summary(video_url: str, hero_images: list[str], shop: str, product_id, provider: str) -> dict:
+    """Muse Spark vision via Meta Model API; heuristic fallback on any failure."""
+    if provider == "muse":
+        print("[vision] muse client lands in next commit — heuristic fallback")
+    elif provider != "heuristic":
+        print(f"[vision] unknown provider={provider} — heuristic fallback")
+    return _build_summary(video_url, hero_images, shop, product_id)
+
+
+def _embed_for(text: str, provider: str) -> tuple[list[float], str]:
+    """Route to the selected embedder; hash fallback keeps rows writable."""
+    if provider == "muse":
+        print("[embed] muse client lands in next commit — hash fallback")
+    elif provider == "deepinfra":
+        print("[embed] deepinfra client lands in next commit — hash fallback")
+    elif provider != "hash":
+        print(f"[embed] unknown provider={provider} — hash fallback")
+    return _text_embedding(text), "hash-lcg-v1"
 
 
 def _build_summary(video_url: str, hero_images: list[str], shop: str, product_id) -> dict:
