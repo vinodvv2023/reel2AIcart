@@ -2,13 +2,13 @@ import { json } from "@remix-run/node";
 import { useLoaderData } from "@remix-run/react";
 import { humanizeCommerceError } from "~/lib/shopify/commerce-errors";
 
-// PRD §5 Step 2: Connect IG Graph + YouTube Data API + Commerce health check.
-// Loader exposes presence booleans only — never secret values.
+// PRD §5 Step 2: Connect IG Graph + Commerce health check.
+// YouTube dropped — Instagram/Facebook only. Loader exposes presence
+// booleans only — never secret values.
 export async function loader() {
   return json({
     hint: humanizeCommerceError("{{IE_30010}}"),
     ig: Boolean(process.env.META_GRAPH_TOKEN && process.env.IG_USER_ID),
-    yt: Boolean(process.env.YOUTUBE_API_KEY),
   });
 }
 
@@ -22,19 +22,15 @@ const badge = (on: boolean) => ({
 });
 
 export default function Connect() {
-  const { hint, ig, yt } = useLoaderData<typeof loader>();
+  const { hint, ig } = useLoaderData<typeof loader>();
   return (
     <main style={{ padding: 24, fontFamily: "system-ui", maxWidth: 640 }}>
-      <h1 style={{ color: "#0F4C4A" }}>Connect Instagram + YouTube</h1>
+      <h1 style={{ color: "#0F4C4A" }}>Connect Instagram</h1>
       <p role="status">{hint}</p>
       <ul style={{ listStyle: "none", padding: 0, display: "grid", gap: 8 }}>
         <li>
           Instagram <span style={badge(ig)}>{ig ? "connected" : "missing key"}</span>
-          {!ig && <small> — set META_GRAPH_TOKEN + IG_USER_ID in .env</small>}
-        </li>
-        <li>
-          YouTube <span style={badge(yt)}>{yt ? "connected" : "missing key"}</span>
-          {!yt && <small> — set YOUTUBE_API_KEY in .env</small>}
+          {!ig && <small> — set META_GRAPH_TOKEN + IG_USER_ID in Vercel env</small>}
         </li>
       </ul>
       <div style={{ display: "flex", gap: 12, marginTop: 16, flexWrap: "wrap" }}>
@@ -44,14 +40,6 @@ export default function Connect() {
           </label>
           <button id="ig-submit" type="submit">
             Connect Instagram
-          </button>
-        </form>
-        <form method="post" action="/auth/youtube">
-          <label htmlFor="yt-submit" style={{ display: "none" }}>
-            Connect YouTube account
-          </label>
-          <button id="yt-submit" type="submit">
-            Connect YouTube
           </button>
         </form>
       </div>
