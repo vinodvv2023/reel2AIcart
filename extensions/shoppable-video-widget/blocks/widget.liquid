@@ -1,6 +1,7 @@
 {# Reel2AICart shoppable widget — video left, products swap at timeline t (PRD §5 Step 5B) #}
-<div data-reel2aicart-widget data-video-id="{{ block.settings.video_id }}" style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
-  <div data-r2ac-video></div>
-  <div data-r2ac-products></div>
+<div data-reel2aicart-widget data-video-id="{{ block.settings.video_id }}" role="region" aria-label="Shoppable video" style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+  <div data-r2ac-video>{{ block.settings.video_url }}</div>
+  <div data-r2ac-products aria-live="polite"><p>Products in this video will appear here.</p></div>
 </div>
-{% schema %}{"name":"Reel2AICart Shoppable Video","settings":[{"type":"text","id":"video_id","label":"Video ID"}]}{% endschema %}
+<style>@media (max-width:640px){[data-reel2aicart-widget]{grid-template-columns:1fr}}</style>
+{% schema %}{"name":"Reel2AICart Shoppable Video","settings":[{"type":"text","id":"video_id","label":"Video ID"},{"type":"text","id":"video_url","label":"Video URL (MP4 or embed)"}]}{% endschema %}
