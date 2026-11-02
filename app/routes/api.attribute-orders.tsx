@@ -27,7 +27,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       headers: { "X-Shopify-Access-Token": access_token, "Content-Type": "application/json" },
       body: JSON.stringify({
         query: `query($q: String!) { orders(first: 50, query: $q) {
-          edges { node { id noteAttributes { name value } } } } }`,
+          edges { node { id customAttributes { key value } } } } }`,
         variables: { q: `updated_at:>=${since}` },
       }),
     });
@@ -37,7 +37,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       continue;
     }
     const gql = (await res.json()) as {
-      data?: { orders: { edges: { node: { id: string; noteAttributes: { name: string; value: string }[] } }[] } };
+      data?: { orders: { edges: { node: { id: string; customAttributes: { key: string; value: string }[] } }[] } };
       errors?: { message: string }[];
     };
     if (gql.errors?.length || !gql.data) {
@@ -46,7 +46,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     }
     for (const { node } of gql.data.orders.edges) {
       scanned++;
-      const vid = node.noteAttributes?.find((a) => a.name === "_shopify_video")?.value;
+      const vid = node.customAttributes?.find((a) => a.key === "_shopify_video")?.value;
       if (!vid) continue;
       const orderId = Number(node.id.split("/").pop());
       await sql`INSERT INTO order_attribution (order_id, shop, video_id)
