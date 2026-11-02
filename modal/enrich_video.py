@@ -87,11 +87,11 @@ def _vision_muse(video_url: str, hero_images: list[str]) -> dict | None:
 
     import httpx
 
-    key = os.environ.get("META_API_KEY", "")
-    base = os.environ.get("META_BASE_URL", "").rstrip("/")
+    key = os.environ.get("MODEL_API_KEY", os.environ.get("META_API_KEY", ""))
+    base = os.environ.get("META_BASE_URL", "https://api.meta.ai/v1").rstrip("/")
     model = os.environ.get("MUSE_VISION_MODEL", "")
     if not key or not base or not model:
-        print("[vision:muse] missing META_API_KEY/META_BASE_URL/MUSE_VISION_MODEL")
+        print("[vision:muse] missing MODEL_API_KEY/META_BASE_URL/MUSE_VISION_MODEL")
         return None
     parts: list[dict] = [{
         "type": "text",
@@ -107,7 +107,7 @@ def _vision_muse(video_url: str, hero_images: list[str]) -> dict | None:
             f"{base}/chat/completions",
             headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
             json={"model": model, "messages": [{"role": "user", "content": parts}],
-                  "temperature": 0.2, "max_tokens": 600},
+                  "max_tokens": 600},
             timeout=120,
         )
         r.raise_for_status()
@@ -169,8 +169,8 @@ def _embed_muse(text: str) -> list[float] | None:
 
     import httpx
 
-    key = os.environ.get("META_API_KEY", "")
-    base = os.environ.get("META_BASE_URL", "").rstrip("/")
+    key = os.environ.get("MODEL_API_KEY", os.environ.get("META_API_KEY", ""))
+    base = os.environ.get("META_BASE_URL", "https://api.meta.ai/v1").rstrip("/")
     model = os.environ.get("MUSE_EMBED_MODEL", "")
     if not key or not base or not model:
         print("[embed:muse] no MUSE_EMBED_MODEL — hash fallback")
