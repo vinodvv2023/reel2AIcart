@@ -18,12 +18,16 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const since = new Date(Date.now() - 35 * 60 * 1000).toISOString();
   let scanned = 0,
     attributed = 0;
+  const errors: string[] = [];
   for (const { shop, access_token } of shops) {
     const res = await fetch(
-      `https://${shop}/admin/api/2024-10/orders.json?limit=100&updated_at_min=${encodeURIComponent(since)}&fields=id,note_attributes`,
+      `https://${shop}/admin/api/2026-10/orders.json?limit=100&updated_at_min=${encodeURIComponent(since)}&fields=id,note_attributes`,
       { headers: { "X-Shopify-Access-Token": access_token } },
     );
-    if (!res.ok) continue;
+    if (!res.ok) {
+      errors.push(`${shop}: shopify ${res.status}`);
+      continue;
+    }
     const { orders } = (await res.json()) as {
       orders: { id: number; note_attributes?: { name: string; value: string }[] }[];
     };
@@ -36,5 +40,5 @@ export async function loader({ request }: LoaderFunctionArgs) {
       attributed++;
     }
   }
-  return json({ ok: true, shops: shops.length, scanned, attributed });
+  return json({ ok: true, shops: shops.length, scanned, attributed, errors });
 }
