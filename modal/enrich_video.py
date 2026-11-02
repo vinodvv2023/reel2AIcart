@@ -122,7 +122,14 @@ def _vision_muse(video_url: str, hero_images: list[str]) -> dict | None:
             raise ValueError("no products[] in response")
         return data
     except Exception as exc:
-        print(f"[vision:muse] failed: {str(exc)[:150]}")
+        detail = ""
+        resp = getattr(exc, "response", None)
+        if resp is not None:
+            try:
+                detail = f" body={resp.text[:300]}"
+            except Exception:
+                pass
+        print(f"[vision:muse] failed: {str(exc)[:150]}{detail}")
         return None
 
 
