@@ -42,3 +42,12 @@ CREATE TABLE IF NOT EXISTS webhook_events (
 );
 CREATE INDEX IF NOT EXISTS webhook_events_recent
   ON webhook_events (created_at DESC);
+
+-- Order attribution (PRD Pain 5). One row per video-attributed order,
+-- written by webhooks.orders from note_attributes._shopify_video.
+CREATE TABLE IF NOT EXISTS order_attribution (
+  order_id BIGINT PRIMARY KEY,
+  shop TEXT NOT NULL DEFAULT '',
+  video_id TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
