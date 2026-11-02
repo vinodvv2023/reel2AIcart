@@ -20,6 +20,7 @@ def enrich_video(video_url: str, hero_images: list[str], shop: str = "", product
         # function reliably receives the neon secret.
         video_url = _product_video_url(shop, product_id)
     if not video_url and not hero_images:
+        print(f"[enrich] skip shop={shop} product={product_id}: no media")
         return {"video_hash": "", "status": "skipped", "reason": "no media"}
     video_hash = hashlib.sha256(video_url.encode()).hexdigest()
     # TODO: Muse Spark Open vision call here → summary + embedding
@@ -51,6 +52,7 @@ def ingest(payload: dict) -> dict:
     """
     video_url = payload.get("video_url", "")
     hero_images = payload.get("hero_images", [])
+    print(f"[ingest] shop={payload.get('shop')} product={payload.get('product_id')} heroes={len(hero_images)}")
     enrich_video.spawn(
         video_url, hero_images, payload.get("shop", ""), payload.get("product_id")
     )
@@ -70,6 +72,7 @@ def _product_video_url(shop: str, product_id) -> str:
     row = cur.fetchone()
     conn.close()
     if not row:
+        print(f"[media] no token for shop={shop}")
         return ""
     import httpx
 
@@ -87,7 +90,8 @@ def _product_video_url(shop: str, product_id) -> str:
             timeout=15,
         )
         edges = r.json()["data"]["product"]["media"]["edges"]
-    except Exception:
+    except Exception as exc:
+        print(f"[media] graphql failed shop={shop}: {exc}")
         return ""
     for e in edges:
         node = e.get("node", {})

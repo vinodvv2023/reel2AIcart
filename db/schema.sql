@@ -27,3 +27,18 @@ CREATE TABLE IF NOT EXISTS shops (
   scopes TEXT NOT NULL DEFAULT '',
   installed_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Webhook delivery log. Every inbound event gets a row (received →
+-- forwarded/failed + reason), rendered on the home dashboard so failures
+-- are visible without digging through function logs.
+CREATE TABLE IF NOT EXISTS webhook_events (
+  id BIGSERIAL PRIMARY KEY,
+  shop TEXT NOT NULL DEFAULT '',
+  topic TEXT NOT NULL DEFAULT '',
+  product_id BIGINT,
+  status TEXT NOT NULL DEFAULT 'received',
+  detail TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS webhook_events_recent
+  ON webhook_events (created_at DESC);

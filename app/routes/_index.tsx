@@ -8,20 +8,23 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const url = new URL(request.url);
   const shop = url.searchParams.get("shop") ?? "unknown shop";
   let counts = { videos: -1, products: -1 };
+  let events: { topic: string; status: string; detail: string; created_at: string }[] = [];
   try {
     const sql = db();
-    const [v, p] = await Promise.all([
+    const [v, p, e] = await Promise.all([
       sql`SELECT COUNT(*)::int AS n FROM video_cache`,
       sql`SELECT COUNT(*)::int AS n FROM video_embeddings`,
+      sql`SELECT topic, status, detail, created_at::text AS created_at FROM webhook_events ORDER BY id DESC LIMIT 10`,
     ]);
     counts = {
       videos: (v as { n: number }[])[0]?.n ?? -1,
       products: (p as { n: number }[])[0]?.n ?? -1,
     };
+    events = e as typeof events;
   } catch {
     // DB unreachable — page still renders, counts show as unavailable.
   }
-  return json({ shop, counts, modal: process.env.MODAL_WEBHOOK_URL ?? null });
+  return json({ shop, counts, modal: process.env.MODAL_WEBHOOK_URL ?? null, events });
 }
 
 const card: React.CSSProperties = {
@@ -32,7 +35,7 @@ const card: React.CSSProperties = {
 };
 
 export default function Home() {
-  const { shop, counts, modal } = useLoaderData<typeof loader>();
+  const { shop, counts, modal, events } = useLoaderData<typeof loader>();
   const ok = (n: number) => (n >= 0 ? String(n) : "unavailable");
   return (
     <main style={{ padding: 24, fontFamily: "system-ui", background: "#faf8f4", minHeight: "100vh" }}>
@@ -62,6 +65,26 @@ export default function Home() {
       <p style={{ marginTop: 16 }}>
         <a href="/connect" style={{ color: "#FF7A5C" }}>Connect Instagram + YouTube →</a>
       </p>
+      <section style={{ ...card, marginTop: 12 }}>
+        <h3>Recent webhook deliveries</h3>
+        {events.length === 0 ? (
+          <small>No deliveries recorded yet — save a product to fire one.</small>
+        ) : (
+          <ul style={{ margin: 0, paddingLeft: 18 }}>
+            {events.map((ev, i) => (
+              <li key={i}>
+                <code>{ev.topic}</code> —{" "}
+                <strong style={{ color: ev.status === "forwarded" ? "#0F4C4A" : "#FF7A5C" }}>
+                  {ev.status}
+                </strong>{" "}
+                <small>
+                  {ev.detail} · {ev.created_at}
+                </small>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
     </main>
   );
 }
