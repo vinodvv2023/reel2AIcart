@@ -1,6 +1,7 @@
 import type { LoaderFunctionArgs } from "@remix-run/node";
 import { json } from "@remix-run/node";
 import { db } from "~/lib/db";
+import { textEmbedding, toVectorLiteral } from "~/lib/video/embed";
 
 // PRD §7: MCP at /mcp/{shop_id} — 4 tools, Edge, Neon reads only, no vision.
 // search_products | get_product_details | get_inventory | get_video_summary
@@ -17,11 +18,25 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
 
   if (tool === "search_products") {
     const q = url.searchParams.get("query") ?? "";
-    // pgvector cosine search: summary JSONB text match first, embedding rerank TODO Day 9-10
+    // pgvector cosine rerank: query embedding vs stored video vectors.
+    // Falls back to JSONB text match when no vectors exist yet.
+    if (q) {
+      const vec = toVectorLiteral(textEmbedding(q));
+      try {
+        const ranked = (await sql`
+          SELECT id, summary, pdp_url, (embedding <=> ${vec}::vector) AS score
+          FROM video_embeddings WHERE embedding IS NOT NULL
+          ORDER BY embedding <=> ${vec}::vector LIMIT 20`) as unknown[];
+        if (ranked.length)
+          return json({ shop: params.shopId, tool, q, results: ranked, rerank: "cosine-v1" });
+      } catch {
+        // vector query failed — fall through to text match
+      }
+    }
     const rows = (await sql`
       SELECT id, summary, pdp_url FROM video_embeddings
       WHERE summary::text ILIKE ${"%" + q + "%"} LIMIT 20`) as { id: string; summary: unknown; pdp_url: string }[];
-    return json({ shop: params.shopId, tool, q, results: rows });
+    return json({ shop: params.shopId, tool, q, results: rows, rerank: "text-fallback" });
   }
 
   // get_product_details + get_inventory read Shopify cache in Neon (stub)
