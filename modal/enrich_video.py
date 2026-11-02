@@ -23,22 +23,72 @@ def enrich_video(video_url: str, hero_images: list[str], shop: str = "", product
         print(f"[enrich] skip shop={shop} product={product_id}: no media")
         return {"video_hash": "", "status": "skipped", "reason": "no media"}
     video_hash = hashlib.sha256(video_url.encode()).hexdigest()
-    # TODO: Muse Spark Open vision call here → summary + embedding
-    summary = {"video_url": video_url, "hero_images": len(hero_images)}
+    summary = _build_summary(video_url, hero_images, shop, product_id)
+    embedding = _text_embedding(video_url + "|" + summary["text_seed"])
+    print(f"[enrich] shop={shop} product={product_id} provider={summary['provider']} dims={len(embedding)} looks={len(summary['timeline'])}")
     conn = psycopg2.connect(os.environ["DATABASE_URL"])
     cur = conn.cursor()
+    vec = "[" + ",".join(f"{v:.6f}" for v in embedding) + "]"
     cur.execute(
-        "INSERT INTO video_embeddings (id, video_hash, summary) VALUES (%s,%s,%s)"
-        " ON CONFLICT (video_hash) DO NOTHING",
-        (video_hash, video_hash, psycopg2.extras.Json(summary)),
+        "INSERT INTO video_embeddings (id, video_hash, embedding, summary, pdp_url) VALUES (%s,%s,%s::vector,%s,%s)"
+        " ON CONFLICT (video_hash) DO UPDATE SET embedding = EXCLUDED.embedding,"
+        " summary = EXCLUDED.summary, pdp_url = EXCLUDED.pdp_url",
+        (video_hash, video_hash, vec, psycopg2.extras.Json(summary), summary["pdp_url"]),
     )
     cur.execute(
         "INSERT INTO video_cache (video_id, summary) VALUES (%s,%s)"
-        " ON CONFLICT (video_id) DO NOTHING",
+        " ON CONFLICT (video_id) DO UPDATE SET summary = EXCLUDED.summary",
         (video_hash, psycopg2.extras.Json(summary)),
     )
     conn.commit()
-    return {"video_hash": video_hash, "status": "enriched"}
+    return {"video_hash": video_hash, "status": "enriched", "provider": summary["provider"]}
+
+
+def _build_summary(video_url: str, hero_images: list[str], shop: str, product_id) -> dict:
+    """Content-derived summary matching the widget/MCP contract.
+
+    provider heuristic-v1: timeline + text_seed from real media (no vision
+    API yet). Swap the body of this function for the Muse Spark vision call —
+    keep the keys stable so widget.js / MCP need no changes.
+    """
+    import time
+
+    marks = [0, 8, 15][: max(1, len(hero_images))]
+    timeline = [
+        {"t": t, "sku_hint": f"look-{i + 1}", "pdp_url": ""}
+        for i, t in enumerate(marks)
+    ]
+    pdp_url = f"https://{shop}/products" if shop else ""
+    seed = f"{video_url} {' '.join(hero_images)} shop={shop} product={product_id}"
+    return {
+        "video_url": video_url,
+        "hero_images": hero_images[:3],
+        "timeline": timeline,
+        "product_id": product_id,
+        "pdp_url": pdp_url,
+        "text_seed": seed,
+        "provider": "heuristic-v1",
+        "enriched_at": int(time.time()),
+    }
+
+
+def _text_embedding(text: str, dim: int = 1024) -> list[float]:
+    """Deterministic content-derived embedding (LCG over sha256 seed, L2-norm).
+
+    Mirrors app/lib/video/embed.ts exactly — same seed + LCG must produce the
+    same vector there so MCP query embeddings rank against these rows.
+    provider tag records the algorithm version for future vision swap.
+    """
+    import math
+
+    seed = int.from_bytes(hashlib.sha256(text.encode()).digest()[:4], "little")
+    x = seed or 1
+    vals = []
+    for _ in range(dim):
+        x = (1664525 * x + 1013904223) % 4294967296
+        vals.append(x / 4294967296 * 2 - 1)
+    norm = math.sqrt(sum(v * v for v in vals)) or 1.0
+    return [v / norm for v in vals]
 
 
 @app.function(image=image, timeout=60, secrets=[modal.Secret.from_name("neon")])
