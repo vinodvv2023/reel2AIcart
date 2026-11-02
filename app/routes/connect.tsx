@@ -2,9 +2,10 @@ import { json } from "@remix-run/node";
 import { useLoaderData } from "@remix-run/react";
 import { humanizeCommerceError } from "~/lib/shopify/commerce-errors";
 
-// PRD §5 Step 2: Connect IG Graph + Commerce health check.
-// YouTube dropped — Instagram/Facebook only. Loader exposes presence
-// booleans only — never secret values.
+// PRD §5 Step 2: Instagram connection status + how publishing works.
+// No connect button: the IG token is provisioned via Meta's Add-account
+// wizard into Vercel env (META_GRAPH_TOKEN + IG_USER_ID), never via in-app
+// OAuth — a POST form here would 404 against a route that must not exist.
 export async function loader() {
   return json({
     hint: humanizeCommerceError("{{IE_30010}}"),
@@ -21,28 +22,28 @@ const badge = (on: boolean) => ({
   background: on ? "#0F4C4A" : "#FF7A5C",
 });
 
+const steps: string[] = [
+  "Post the reel in Instagram as usual — publishing stays in IG, this app never re-uploads.",
+  "Tag products on the reel (media ID + variant) so View Products appears for mobile viewers.",
+  "Show the same video on-site via the shoppable widget; PDP links carry the video_id for attribution.",
+];
+
 export default function Connect() {
   const { hint, ig } = useLoaderData<typeof loader>();
   return (
     <main style={{ padding: 24, fontFamily: "system-ui", maxWidth: 640 }}>
       <h1 style={{ color: "#0F4C4A" }}>Connect Instagram</h1>
       <p role="status">{hint}</p>
-      <ul style={{ listStyle: "none", padding: 0, display: "grid", gap: 8 }}>
-        <li>
-          Instagram <span style={badge(ig)}>{ig ? "connected" : "missing key"}</span>
-          {!ig && <small> — set META_GRAPH_TOKEN + IG_USER_ID in Vercel env</small>}
-        </li>
-      </ul>
-      <div style={{ display: "flex", gap: 12, marginTop: 16, flexWrap: "wrap" }}>
-        <form method="post" action="/auth/instagram">
-          <label htmlFor="ig-submit" style={{ display: "none" }}>
-            Connect Instagram account
-          </label>
-          <button id="ig-submit" type="submit">
-            Connect Instagram
-          </button>
-        </form>
-      </div>
+      <p>
+        Instagram <span style={badge(ig)}>{ig ? "connected" : "missing key"}</span>
+        {!ig && <small> — set META_GRAPH_TOKEN + IG_USER_ID in Vercel env</small>}
+      </p>
+      <h2>How a video reaches your store</h2>
+      <ol style={{ display: "grid", gap: 8, paddingLeft: 20 }}>
+        {steps.map((s) => (
+          <li key={s}>{s}</li>
+        ))}
+      </ol>
     </main>
   );
 }

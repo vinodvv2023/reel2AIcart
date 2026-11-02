@@ -2,7 +2,7 @@
 export const COMMERCE_ERRORS: Record<string, string> = {
   IE_30007: "Catalog not approved — fix in Commerce Manager.",
   IE_30002: "Domain mismatch — verify domain in Business Manager.",
-  IE_30010: "Commerce Account under review — use on-site widget + YouTube meanwhile.",
+  IE_30010: "Commerce Account under review — use on-site widget meanwhile.",
 };
 
 export function humanizeCommerceError(raw: string): string {
