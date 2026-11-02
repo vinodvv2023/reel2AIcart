@@ -64,6 +64,8 @@ export default function Home() {
       </section>
       <p style={{ marginTop: 16 }}>
         <a href="/connect" style={{ color: "#FF7A5C" }}>Connect Instagram + YouTube →</a>
+        {" · "}
+        <a href={`/auth/login?shop=${encodeURIComponent(shop)}`}>Reconnect store →</a>
       </p>
       <section style={{ ...card, marginTop: 12 }}>
         <h3>Recent webhook deliveries</h3>
