@@ -42,11 +42,31 @@ def words(name):
     return [w for w in re.split(r"[^a-z]+", name.lower()) if w and w not in STOP]
 
 
+def bge_embed(text, token):
+    """bge-large via DeepInfra (native 1024-dim), L2-normed like Modal rows."""
+    req = urllib.request.Request(
+        "https://api.deepinfra.com/v1/openai/embeddings",
+        data=json.dumps({"model": "BAAI/bge-large-en-v1.5", "input": text}).encode(),
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=60) as r:
+        vec = json.load(r)["data"][0]["embedding"]
+    n = math.sqrt(sum(v * v for v in vec)) or 1.0
+    return [v / n for v in vec]
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--write", action="store_true")
     ap.add_argument("--shop", default="reel2aicart-test.myshopify.com")
+    ap.add_argument("--provider", choices=["hash", "bge"], default="hash",
+                    help="embedding algorithm; bge needs DEEPINFRA_TOKEN (env or local .env)")
     args = ap.parse_args()
+    token = ""
+    if args.provider == "bge":
+        token = os.environ.get("DEEPINFRA_TOKEN", "") or load_env().get("DEEPINFRA_TOKEN", "")
+        if not token:
+            raise SystemExit("DEEPINFRA_TOKEN missing: $env:DEEPINFRA_TOKEN='<token>' or add to local .env (gitignored)")
     files = sorted(Path("docs/videos").glob("*.mp4"))
     print(f"files: {len(files)}")
     conn = None
@@ -67,6 +87,14 @@ def main():
         for x in set(w):
             freq[x] = freq.get(x, 0) + 1
         seed = f"{f.name} {' '.join(w)}"
+        tag = "hash-lcg-v1"
+        emb = text_embedding(seed)
+        if args.write and args.provider == "bge":
+            try:
+                emb = bge_embed(seed, token)
+                tag = "deepinfra-bge-v1"
+            except Exception as e:
+                print(f"  bge failed for {f.name}: {str(e)[:80]} — hash fallback")
         if args.write:
             cur = conn.cursor()
             cur.execute("SELECT 1 FROM video_embeddings WHERE video_hash=%s", (h,))
@@ -76,8 +104,9 @@ def main():
             summary = {"video_url": f"local:{f.name}", "hero_images": [],
                        "timeline": [{"t": t, "sku_hint": f"look-{i + 1}", "pdp_url": ""} for i, t in enumerate([0, 8, 15])],
                        "product_id": None, "pdp_url": "", "text_seed": seed,
-                       "provider": "bulk-local-v1", "enriched_at": int(time.time())}
-            vec = "[" + ",".join(f"{v:.6f}" for v in text_embedding(seed)) + "]"
+                       "provider": "bulk-local-v1", "providers": {"vision": "heuristic-v1", "embed": tag},
+                       "enriched_at": int(time.time())}
+            vec = "[" + ",".join(f"{v:.6f}" for v in emb) + "]"
             cur.execute("INSERT INTO video_embeddings (id, video_hash, embedding, summary, pdp_url) VALUES (%s,%s,%s::vector,%s,%s)"
                         " ON CONFLICT (video_hash) DO UPDATE SET embedding=EXCLUDED.embedding, summary=EXCLUDED.summary",
                         (h, h, vec, extras.Json(summary), ""))
