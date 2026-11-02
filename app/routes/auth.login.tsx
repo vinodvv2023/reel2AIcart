@@ -9,7 +9,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
   if (!shop) return redirect("/connect");
   const params = new URLSearchParams({
     client_id: process.env.SHOPIFY_API_KEY ?? "",
-    scope: "read_products,read_inventory,read_content,write_content",
+    scope: "read_products,read_inventory,read_content,write_content,read_orders",
     redirect_uri: "https://reel2-aicart.vercel.app/auth/callback",
     state: `${shop}:${Date.now()}`,
   });

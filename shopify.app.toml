@@ -6,11 +6,10 @@ embedded = true
 
 [build]
 dev_store_url = ""
-include_config_on_deploy = true
 
 [access_scopes]
 # PRD §8 — minimal scopes for MVP Day 1-2
-scopes = "read_products,read_inventory,read_content,write_content"
+scopes = "read_products,read_inventory,read_content,write_content,read_orders"
 
 [auth]
 redirect_urls = ["https://reel2-aicart.vercel.app/auth/callback", "https://reel2-aicart.vercel.app/auth/shopify/callback"]
