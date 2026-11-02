@@ -1,0 +1,5 @@
+# Reel2AICart shoppable video widget (PRD §8, Phase 4). Blocks + assets
+# are auto-discovered from sibling dirs; this file is what makes the CLI
+# (and the next `shopify app deploy`) recognize the extension at all.
+name = "Reel2AICart Shoppable Video"
+type = "theme"
