@@ -21,10 +21,6 @@ api_version = "2026-10"
 topics = ["products/create", "products/update", "inventory_levels/update"]
 uri = "https://reel2-aicart.vercel.app/webhooks/shopify"
 
-[[webhooks.subscriptions]]
-topics = ["orders/create"]
-uri = "https://reel2-aicart.vercel.app/webhooks/orders"
-
 [extensions]
 # Theme App Extension — shoppable video widget (PRD §8, Phase 4)
 type = "theme_app_extension"
