@@ -53,6 +53,7 @@ export async function action({ request }: ActionFunctionArgs) {
         product_id: p.id ?? null,
         video_url: "",
         hero_images: hero.slice(0, 3),
+        secret: process.env.MODAL_INGEST_SECRET ?? "",
       };
     } catch {
       payload = { topic, product_id: null, video_url: "", hero_images: [] };

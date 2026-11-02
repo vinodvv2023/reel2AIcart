@@ -270,15 +270,23 @@ def _text_embedding(text: str, dim: int = 1024) -> list[float]:
     return [v / norm for v in vals]
 
 
-@app.function(image=image, timeout=60, secrets=[modal.Secret.from_name("neon")])
+@app.function(image=image, timeout=60, secrets=[modal.Secret.from_name("neon"), modal.Secret.from_name("modal-auth")])
 @modal.fastapi_endpoint(method="POST", docs=True)
 def ingest(payload: dict) -> dict:
     """Public HTTPS entry — Shopify webhook handler POSTs here (<100ms ack).
 
-    URL after `modal deploy` looks like:
+    Auth: Vercel (the only caller — Shopify can't set headers) embeds
+    payload.secret, checked against the modal-auth secret. Wrong/missing
+    secret → 401, nothing spawned. URL after `modal deploy` looks like:
     https://<workspace>--reel2aicart-enrich-ingest.modal.run
     Copy it into .env as MODAL_WEBHOOK_URL.
     """
+    import os
+
+    from fastapi import HTTPException
+
+    if payload.pop("secret", "") != os.environ.get("MODAL_INGEST_SECRET", ""):
+        raise HTTPException(status_code=401, detail="unauthorized")
     video_url = payload.get("video_url", "")
     hero_images = payload.get("hero_images", [])
     print(f"[ingest] shop={payload.get('shop')} product={payload.get('product_id')} heroes={len(hero_images)}")
