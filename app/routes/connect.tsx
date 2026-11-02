@@ -218,8 +218,9 @@ export default function Connect() {
                 <a className="btn btn-ghost" aria-disabled={page >= pages} href={page >= pages ? "#" : qs({ ...keep, pg: String(page + 1) })}>Next</a>
               </div>
               {selected && (
-                <fieldset style={{ marginTop: 12 }}>
-                  <legend>Variant of {selected.title}</legend>
+            <fieldset style={{ marginTop: 12 }}>
+              <legend>Variant of {selected.title}</legend>
+              <p><small>Sent as the Meta catalog product ID, synced from Shopify by the Facebook and Instagram sales channel.</small></p>
                   {selected.variants.map((v) => (
                     <label key={v.id} style={{ display: "block", marginTop: 6 }}>
                       <input type="radio" name="variantId" value={v.id} form="tagform" required />{" "}
