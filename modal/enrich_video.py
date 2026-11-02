@@ -107,7 +107,7 @@ def _vision_muse(video_url: str, hero_images: list[str]) -> dict | None:
             f"{base}/chat/completions",
             headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
             json={"model": model, "messages": [{"role": "user", "content": parts}],
-                  "reasoning_effort": "none", "max_tokens": 600},
+                  "reasoning_effort": "minimal", "max_tokens": 600},
             timeout=120,
         )
         r.raise_for_status()
