@@ -64,21 +64,163 @@ def _providers() -> tuple[str, str]:
 def _vision_summary(video_url: str, hero_images: list[str], shop: str, product_id, provider: str) -> dict:
     """Muse Spark vision via Meta Model API; heuristic fallback on any failure."""
     if provider == "muse":
-        print("[vision] muse client lands in next commit — heuristic fallback")
+        parsed = _vision_muse(video_url, hero_images)
+        if parsed:
+            return _contract_from_muse(video_url, hero_images, shop, product_id, parsed)
+        print("[vision] muse failed — heuristic fallback")
+    elif provider == "gemini":
+        print("[vision] gemini client lands post-hackathon — heuristic fallback")
     elif provider != "heuristic":
         print(f"[vision] unknown provider={provider} — heuristic fallback")
     return _build_summary(video_url, hero_images, shop, product_id)
 
 
+def _vision_muse(video_url: str, hero_images: list[str]) -> dict | None:
+    """Muse Spark multimodal summary (Meta Model API, OpenAI-compatible chat).
+
+    Returns {"products": [{"sku_hint": str, "detail": str}], "scene": str}
+    or None. All config via env (META_API_KEY/META_BASE_URL/MUSE_VISION_MODEL)
+    so model IDs track dev.meta.ai without code changes.
+    """
+    import json
+    import os
+
+    import httpx
+
+    key = os.environ.get("META_API_KEY", "")
+    base = os.environ.get("META_BASE_URL", "").rstrip("/")
+    model = os.environ.get("MUSE_VISION_MODEL", "")
+    if not key or not base or not model:
+        print("[vision:muse] missing META_API_KEY/META_BASE_URL/MUSE_VISION_MODEL")
+        return None
+    parts: list[dict] = [{
+        "type": "text",
+        "text": ("List each distinct product visible. Respond ONLY with JSON: "
+                 '{"products": [{"sku_hint": "short name", "detail": "color/material in 6 words"}], "scene": "one line"}.'),
+    }]
+    for u in (hero_images or [])[:3]:
+        parts.append({"type": "image_url", "image_url": {"url": u}})
+    if not hero_images and video_url:
+        parts[0]["text"] += f" No images provided; video URL for context only: {video_url}."
+    try:
+        r = httpx.post(
+            f"{base}/chat/completions",
+            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+            json={"model": model, "messages": [{"role": "user", "content": parts}],
+                  "temperature": 0.2, "max_tokens": 600},
+            timeout=120,
+        )
+        r.raise_for_status()
+        content = r.json()["choices"][0]["message"]["content"]
+        data = json.loads(content[content.index("{"): content.rindex("}") + 1])
+        if not isinstance(data.get("products"), list):
+            raise ValueError("no products[] in response")
+        return data
+    except Exception as exc:
+        print(f"[vision:muse] failed: {str(exc)[:150]}")
+        return None
+
+
+def _contract_from_muse(video_url: str, hero_images: list[str], shop: str, product_id, parsed: dict) -> dict:
+    """Map a Muse vision response onto the widget/MCP contract (stable keys)."""
+    import time
+
+    products = parsed.get("products", [])[:3]
+    marks = [0, 8, 15][: max(1, len(products))]
+    timeline = [
+        {"t": t, "sku_hint": str(p.get("sku_hint", f"look-{i + 1}")), "pdp_url": ""}
+        for i, (t, p) in enumerate(zip(marks, products or [{}]))
+    ]
+    seed = f"{parsed.get('scene', '')} {' '.join(str(p.get('detail', '')) for p in products)}".strip()
+    return {
+        "video_url": video_url,
+        "hero_images": (hero_images or [])[:3],
+        "timeline": timeline,
+        "product_id": product_id,
+        "pdp_url": f"https://{shop}/products" if shop else "",
+        "text_seed": seed or video_url,
+        "provider": "muse-spark-vision-v1",
+        "enriched_at": int(time.time()),
+    }
+
+
 def _embed_for(text: str, provider: str) -> tuple[list[float], str]:
     """Route to the selected embedder; hash fallback keeps rows writable."""
+    vec: list[float] | None = None
+    tag = "hash-lcg-v1"
     if provider == "muse":
-        print("[embed] muse client lands in next commit — hash fallback")
+        vec = _embed_muse(text)
+        tag = "muse-embed-v1" if vec else "hash-lcg-v1"
     elif provider == "deepinfra":
-        print("[embed] deepinfra client lands in next commit — hash fallback")
+        vec = _embed_deepinfra(text)
+        tag = "deepinfra-bge-v1" if vec else "hash-lcg-v1"
     elif provider != "hash":
         print(f"[embed] unknown provider={provider} — hash fallback")
-    return _text_embedding(text), "hash-lcg-v1"
+    return (vec or _text_embedding(text)), tag
+
+
+def _embed_muse(text: str) -> list[float] | None:
+    """Embeddings via Meta Model API when MUSE_EMBED_MODEL is set, else None.
+
+    Falls back to hash so enrichment never hard-fails on a missing embedder —
+    vision (the judged surface) stays Muse regardless.
+    """
+    import os
+
+    import httpx
+
+    key = os.environ.get("META_API_KEY", "")
+    base = os.environ.get("META_BASE_URL", "").rstrip("/")
+    model = os.environ.get("MUSE_EMBED_MODEL", "")
+    if not key or not base or not model:
+        print("[embed:muse] no MUSE_EMBED_MODEL — hash fallback")
+        return None
+    try:
+        r = httpx.post(
+            f"{base}/embeddings",
+            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+            json={"model": model, "input": text},
+            timeout=60,
+        )
+        r.raise_for_status()
+        return _fit_1024(r.json()["data"][0]["embedding"])
+    except Exception as exc:
+        print(f"[embed:muse] failed: {str(exc)[:150]}")
+        return None
+
+
+def _embed_deepinfra(text: str) -> list[float] | None:
+    """bge-large (native 1024-dim) via DeepInfra OpenAI-compatible endpoint."""
+    import os
+
+    import httpx
+
+    token = os.environ.get("DEEPINFRA_TOKEN", "")
+    if not token:
+        print("[embed:deepinfra] missing DEEPINFRA_TOKEN")
+        return None
+    model = os.environ.get("DEEPINFRA_EMBED_MODEL", "BAAI/bge-large-en-v1.5")
+    try:
+        r = httpx.post(
+            "https://api.deepinfra.com/v1/openai/embeddings",
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            json={"model": model, "input": text},
+            timeout=60,
+        )
+        r.raise_for_status()
+        return _fit_1024(r.json()["data"][0]["embedding"])
+    except Exception as exc:
+        print(f"[embed:deepinfra] failed: {str(exc)[:150]}")
+        return None
+
+
+def _fit_1024(vec: list[float]) -> list[float]:
+    """Truncate/pad to 1024 dims + L2-norm to match vector(1024) + hash parity."""
+    import math
+
+    v = [float(x) for x in vec[:1024]] + [0.0] * max(0, 1024 - len(vec))
+    norm = math.sqrt(sum(x * x for x in v)) or 1.0
+    return [x / norm for x in v]
 
 
 def _build_summary(video_url: str, hero_images: list[str], shop: str, product_id) -> dict:
