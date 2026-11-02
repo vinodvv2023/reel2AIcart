@@ -107,11 +107,16 @@ def _vision_muse(video_url: str, hero_images: list[str]) -> dict | None:
             f"{base}/chat/completions",
             headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
             json={"model": model, "messages": [{"role": "user", "content": parts}],
-                  "max_tokens": 600},
+                  "reasoning_effort": "none", "max_tokens": 600},
             timeout=120,
         )
         r.raise_for_status()
-        content = r.json()["choices"][0]["message"]["content"]
+        msg = r.json()["choices"][0]["message"]
+        content = msg.get("content") or msg.get("reasoning_content") or ""
+        if isinstance(content, list):  # content-block shape: join text parts
+            content = "".join(
+                p.get("text", "") for p in content if isinstance(p, dict) and p.get("type") == "text"
+            )
         data = json.loads(content[content.index("{"): content.rindex("}") + 1])
         if not isinstance(data.get("products"), list):
             raise ValueError("no products[] in response")
