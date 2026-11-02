@@ -4,12 +4,12 @@ import { tagInstagram } from "~/lib/activation/instagram";
 import { humanizeCommerceError } from "~/lib/shopify/commerce-errors";
 import { db } from "~/lib/db";
 
-// PRD §5 Step 2 + 5A: status, publishing model, reel picker (IG media with
-// thumbnails) + product picker (search, thumbnails, variants) → product_tags.
-// Tokens from Vercel env; no in-app OAuth exists or is needed.
+// Tag-a-reel workspace: reels left, products right. Server state only
+// (q/rq/product/pg via GET), radios post natively. No client JS.
 type Reel = { id: string; caption?: string; thumbnail_url?: string; timestamp?: string };
 type Variant = { id: number; title: string; price: string };
 type Product = { id: number; title: string; image?: string; variants: Variant[] };
+const PER_PAGE = 8;
 
 async function igMedia(): Promise<{ reels: Reel[]; error: string | null }> {
   const token = process.env.META_GRAPH_TOKEN ?? "";
@@ -51,26 +51,31 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const q = params.get("q") ?? "";
   const rq = params.get("rq") ?? "";
   const productId = params.get("product") ?? "";
+  const pg = Math.max(1, parseInt(params.get("pg") ?? "1", 10) || 1);
   const [{ reels, error: reelsError }, { products, error: productsError }] = await Promise.all([
     igMedia(),
     shopProducts(),
   ]);
-  const filteredReels = rq
+  const matchedReels = rq
     ? reels.filter(
-        (r) =>
-          (r.caption ?? "").toLowerCase().includes(rq.toLowerCase()) || r.id.includes(rq),
+        (r) => (r.caption ?? "").toLowerCase().includes(rq.toLowerCase()) || r.id.includes(rq),
       )
     : reels;
-  const filtered = q
+  const matched = q
     ? products.filter((p) => p.title.toLowerCase().includes(q.toLowerCase()))
     : products;
+  const pages = Math.max(1, Math.ceil(matched.length / PER_PAGE));
+  const page = Math.min(pg, pages);
   return json({
     hint: humanizeCommerceError("{{IE_30010}}"),
     ig: Boolean(process.env.META_GRAPH_TOKEN && process.env.IG_USER_ID),
-    reels: filteredReels,
+    reels: matchedReels,
     reelsError,
-    products: filtered,
+    products: matched.slice((page - 1) * PER_PAGE, page * PER_PAGE),
     productsError,
+    total: matched.length,
+    page,
+    pages,
     q,
     rq,
     productId,
@@ -94,123 +99,152 @@ export async function action({ request }: ActionFunctionArgs) {
   }
 }
 
-const badge = (on: boolean) => ({
-  display: "inline-block",
-  padding: "2px 10px",
-  borderRadius: 999,
-  fontSize: 12,
-  color: "#fff",
-  background: on ? "#0F4C4A" : "#FF7A5C",
-});
-
-const thumb: React.CSSProperties = { width: 64, height: 64, objectFit: "cover", borderRadius: 8 };
-const pick: React.CSSProperties = {
-  display: "flex",
-  gap: 10,
-  alignItems: "center",
-  border: "1px solid #e5e0d8",
-  borderRadius: 10,
-  padding: 8,
-  marginTop: 8,
-  background: "#fff",
-};
+const qs = (p: Record<string, string>) =>
+  `?${Object.entries(p).filter(([, v]) => v).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join("&")}`;
 
 export default function Connect() {
-  const { hint, ig, reels, reelsError, products, productsError, q, rq, productId } =
+  const { hint, ig, reels, reelsError, products, productsError, total, page, pages, q, rq, productId } =
     useLoaderData<typeof loader>();
   const result = useActionData<typeof action>();
   const selected = products.find((p) => String(p.id) === productId);
+  const keep = { q, rq, product: productId };
   return (
-    <main style={{ padding: 24, fontFamily: "system-ui", maxWidth: 720 }}>
-      <h1 style={{ color: "#0F4C4A" }}>Connect Instagram</h1>
-      <p role="status">{hint}</p>
-      <p>
-        Instagram <span style={badge(ig)}>{ig ? "connected" : "missing key"}</span>
-        {!ig && <small> - set META_GRAPH_TOKEN + IG_USER_ID in Vercel env</small>}
-      </p>
+    <main className="r2ac-wrap">
+      <style>{`
+        .r2ac-wrap{max-width:1120px;margin:0 auto;padding:24px;font-family:system-ui,sans-serif;background:#fcfcf9;color:#141413}
+        .r2ac-brand{display:flex;align-items:center;gap:10px}
+        .r2ac-mark{width:34px;height:34px;border-radius:10px;background:#0f4c4a;position:relative;flex:none}
+        .r2ac-mark::after{content:"";position:absolute;left:12px;top:9px;border-left:12px solid #ff7a5c;border-top:8px solid transparent;border-bottom:8px solid transparent}
+        .r2ac-cols{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:16px}
+        @media (max-width:900px){.r2ac-cols{grid-template-columns:1fr}}
+        .r2ac-card{border:1px solid #e8e2da;border-radius:12px;padding:16px;background:#fff}
+        .r2ac-card h2{margin:0 0 4px;color:#0f4c4a}
+        .r2ac-row{display:flex;gap:10px;align-items:center;border-radius:10px;padding:8px;margin-top:8px}
+        .r2ac-a{background:#fdf3ec}.r2ac-b{background:#eef6f5}
+        .r2ac-row img{width:64px;height:64px;object-fit:cover;border-radius:8px;flex:none}
+        .btn{display:inline-block;border-radius:999px;padding:10px 18px;font-weight:600;font-size:15px;cursor:pointer;text-decoration:none;border:1px solid transparent;transition:background-color 200ms,color 200ms}
+        .btn-primary{background:#0f4c4a;color:#fff}.btn-primary:hover{background:#0d3f3d}.btn-primary:active{transform:scale(.98)}
+        .btn-ghost{background:#fff;border-color:#0f4c4a;color:#0f4c4a}.btn-ghost:hover{background:#eef6f5}.btn-ghost:active{transform:scale(.98)}
+        .btn[disabled]{opacity:.55;cursor:default}
+        input[type=text],input[type=search]{padding:9px 12px;font-size:16px;border-radius:8px;border:1px solid #e8e2da;color:#141413;background:#fff}
+        label{font-weight:600}
+        :focus-visible{outline:2px solid #ff7a5c;outline-offset:2px}
+        .r2ac-pager{display:flex;gap:10px;align-items:center;margin-top:12px}
+        .r2ac-ok{color:#0f4c4a}.r2ac-err{color:#b3402a}
+      `}</style>
 
-      <h2>1. Pick a reel</h2>
-      {reelsError ? (
-        <p role="alert" style={{ color: "#FF7A5C" }}>{reelsError}</p>
-      ) : (
-        <>
-          <Form method="get" aria-label="Search reels">
-            <label htmlFor="rq">Search reels</label>{" "}
-            <input id="rq" name="rq" defaultValue={rq} placeholder="e.g. ballerina" />{" "}
-            <input type="hidden" name="q" value={q} />
-            <input type="hidden" name="product" value={productId} />
-            <button type="submit">Search</button>
-          </Form>
-          <div role="radiogroup" aria-label="Recent reels">
-            {reels.map((reel) => (
-              <label key={reel.id} style={pick}>
-                <input type="radio" name="mediaId" value={reel.id} form="tagform" required />
-                {reel.thumbnail_url && (
-                  <img src={reel.thumbnail_url} alt="" loading="lazy" style={thumb} />
-                )}
-                <span>
-                  <strong>{reel.caption?.slice(0, 80) || "(no caption)"}</strong>
-                  <br />
-                  <small>
-                    {reel.id} · {reel.timestamp?.slice(0, 10)}
-                  </small>
-                </span>
-              </label>
-            ))}
-            {reels.length === 0 && <p><small>No reels match this search.</small></p>}
-          </div>
-        </>
-      )}
-      <details style={{ marginTop: 8 }}>
-        <summary>Finding a reel ID manually</summary>
-        <p>Instagram does not show numeric media IDs in the app - use the picker above, which lists your recent reels with thumbnails.</p>
-      </details>
+      <header className="r2ac-brand" aria-label="Reel2AICart">
+        <span className="r2ac-mark" aria-hidden="true" />
+        <strong style={{ fontSize: 22, color: "#0f4c4a" }}>
+          Reel2<span style={{ color: "#ff7a5c" }}>AI</span>Cart
+        </strong>
+      </header>
 
-      <h2>2. Pick a product + variant</h2>
-      {productsError ? (
-        <p role="alert" style={{ color: "#FF7A5C" }}>{productsError}</p>
-      ) : (
-        <>
-          <Form method="get" aria-label="Search products">
-            <label htmlFor="q">Search products</label>{" "}
-            <input id="q" name="q" defaultValue={q} placeholder="e.g. gown" />{" "}
-            <input type="hidden" name="rq" value={rq} />{" "}
-            <button type="submit">Search</button>
-          </Form>
-          {products.map((p) => (
-            <div key={p.id} style={pick}>
-              {p.image && <img src={p.image} alt="" loading="lazy" style={thumb} />}
-              <span style={{ flex: 1 }}>
-                <strong>{p.title}</strong>
-                <br />
-                <small>{p.variants.length} variant(s)</small>
-              </span>
-              <a href={`?q=${encodeURIComponent(q)}&rq=${encodeURIComponent(rq)}&product=${p.id}`}>Select</a>
-            </div>
-          ))}
-          {selected && (
-            <fieldset style={{ marginTop: 12 }}>
-              <legend>Variant of {selected.title}</legend>
-              {selected.variants.map((v) => (
-                <label key={v.id} style={{ display: "block", marginTop: 6 }}>
-                  <input type="radio" name="variantId" value={v.id} form="tagform" required />{" "}
-                  {v.title} - ${v.price} <small>({v.id})</small>
-                </label>
-              ))}
-            </fieldset>
-          )}
-        </>
-      )}
-
-      <h2>3. Tag it</h2>
-      <Form method="post" id="tagform" aria-label="Tag products on the selected reel">
-        <button type="submit">Tag products on reel</button>
-      </Form>
-      {result && (
-        <p role={result.ok ? "status" : "alert"} style={{ color: result.ok ? "#0F4C4A" : "#FF7A5C" }}>
-          {result.ok ? `Tagged reel ${result.mediaId} ✓ - check the reel on mobile for View Products.` : result.error}
+      <section className="r2ac-card" style={{ marginTop: 16 }}>
+        <h2>Tag Instagram reels with your products</h2>
+        <p>
+          This page links a reel to Shopify products. Pick a reel on the left, a product and
+          variant on the right, then tag it. Tagging calls Instagram product tags, so shoppers
+          see View Products on the reel and land on your product pages with attribution.
         </p>
-      )}
+        <p>
+          <small>
+            Status: {hint} Instagram is {ig ? "connected" : "missing keys - set META_GRAPH_TOKEN + IG_USER_ID in Vercel env"}.
+            Expected outcome after tagging: a green confirmation here and product tags visible on
+            the reel on mobile within minutes. Failures show the exact account error, never a blank page.
+          </small>
+        </p>
+      </section>
+
+      <div className="r2ac-cols">
+        <section className="r2ac-card" aria-label="Instagram reels">
+          <h2>Reels</h2>
+          {reelsError ? (
+            <p role="alert" className="r2ac-err">{reelsError}</p>
+          ) : (
+            <>
+              <Form method="get" aria-label="Search reels">
+                <label htmlFor="rq">Search reels</label><br />
+                <input id="rq" name="rq" type="search" defaultValue={rq} placeholder="e.g. ballerina" />{" "}
+                <input type="hidden" name="q" value={q} />
+                <input type="hidden" name="product" value={productId} />
+                <button type="submit" className="btn btn-ghost">Search</button>
+              </Form>
+              <div role="radiogroup" aria-label="Recent reels">
+                {reels.map((reel, i) => (
+                  <label key={reel.id} className={`r2ac-row ${i % 2 ? "r2ac-b" : "r2ac-a"}`}>
+                    <input type="radio" name="mediaId" value={reel.id} form="tagform" required />
+                    {reel.thumbnail_url && <img src={reel.thumbnail_url} alt="" loading="lazy" />}
+                    <span>
+                      <strong>{reel.caption?.slice(0, 80) || "(no caption)"}</strong>
+                      <br />
+                      <small>{reel.id} · {reel.timestamp?.slice(0, 10)}</small>
+                    </span>
+                  </label>
+                ))}
+                {reels.length === 0 && <p><small>No reels match this search.</small></p>}
+              </div>
+            </>
+          )}
+        </section>
+
+        <section className="r2ac-card" aria-label="Shopify products">
+          <h2>Products</h2>
+          {productsError ? (
+            <p role="alert" className="r2ac-err">{productsError}</p>
+          ) : (
+            <>
+              <Form method="get" aria-label="Search products">
+                <label htmlFor="q">Search products</label><br />
+                <input id="q" name="q" type="search" defaultValue={q} placeholder="e.g. gown" />{" "}
+                <input type="hidden" name="rq" value={rq} />{" "}
+                <button type="submit" className="btn btn-ghost">Search</button>
+              </Form>
+              {products.map((p, i) => (
+                <div key={p.id} className={`r2ac-row ${i % 2 ? "r2ac-b" : "r2ac-a"}`}>
+                  {p.image && <img src={p.image} alt="" loading="lazy" />}
+                  <span style={{ flex: 1 }}>
+                    <strong>{p.title}</strong>
+                    <br />
+                    <small>{p.variants.length} variant(s)</small>
+                  </span>
+                  <a className="btn btn-ghost" href={qs({ ...keep, product: String(p.id), pg: "1" })}>Select</a>
+                </div>
+              ))}
+              {products.length === 0 && <p><small>No products match this search.</small></p>}
+              <div className="r2ac-pager">
+                <a className="btn btn-ghost" aria-disabled={page <= 1} href={page <= 1 ? "#" : qs({ ...keep, pg: String(page - 1) })}>Prev</a>
+                <small>Page {page} of {pages} ({total} products)</small>
+                <a className="btn btn-ghost" aria-disabled={page >= pages} href={page >= pages ? "#" : qs({ ...keep, pg: String(page + 1) })}>Next</a>
+              </div>
+              {selected && (
+                <fieldset style={{ marginTop: 12 }}>
+                  <legend>Variant of {selected.title}</legend>
+                  {selected.variants.map((v) => (
+                    <label key={v.id} style={{ display: "block", marginTop: 6 }}>
+                      <input type="radio" name="variantId" value={v.id} form="tagform" required />{" "}
+                      {v.title} - ${v.price} <small>({v.id})</small>
+                    </label>
+                  ))}
+                </fieldset>
+              )}
+            </>
+          )}
+        </section>
+      </div>
+
+      <section className="r2ac-card" style={{ marginTop: 20 }}>
+        <Form method="post" id="tagform" aria-label="Tag products on the selected reel">
+          <button type="submit" className="btn btn-primary">Tag products on reel</button>
+        </Form>
+        {result && (
+          <p role={result.ok ? "status" : "alert"} className={result.ok ? "r2ac-ok" : "r2ac-err"}>
+            {result.ok
+              ? `Tagged reel ${result.mediaId} - check the reel on mobile for View Products.`
+              : result.error}
+          </p>
+        )}
+      </section>
     </main>
   );
 }
