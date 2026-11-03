@@ -6,7 +6,7 @@ import { db } from "~/lib/db";
 
 // Tag-a-reel workspace: reels left, products right. Server state only
 // (q/rq/product/pg via GET), radios post natively. No client JS.
-type Reel = { id: string; caption?: string; thumbnail_url?: string; timestamp?: string };
+type Reel = { id: string; caption?: string; thumbnail_url?: string; media_url?: string; media_type?: string; timestamp?: string };
 type Variant = { id: number; title: string; price: string };
 type Product = { id: number; title: string; image?: string; variants: Variant[] };
 const PER_PAGE = 8;
@@ -17,7 +17,7 @@ async function igMedia(): Promise<{ reels: Reel[]; error: string | null }> {
   if (!token || !ig) return { reels: [], error: "IG keys missing in Vercel env." };
   try {
     const r = await fetch(
-      `https://graph.facebook.com/v19.0/${ig}/media?fields=id,caption,thumbnail_url,timestamp&limit=25&access_token=${token}`,
+      `https://graph.facebook.com/v19.0/${ig}/media?fields=id,caption,thumbnail_url,media_url,media_type,timestamp&limit=25&access_token=${token}`,
     );
     if (!r.ok) return { reels: [], error: `IG API ${r.status} - token may be expired.` };
     return { reels: ((await r.json()) as { data: Reel[] }).data ?? [], error: null };
@@ -186,6 +186,8 @@ export default function Connect() {
                     <input type="radio" name="mediaId" value={reel.id} form="tagform" required />
                     {reel.thumbnail_url ? (
                       <img src={reel.thumbnail_url} alt="" loading="lazy" />
+                    ) : reel.media_type === "VIDEO" && reel.media_url ? (
+                      <video muted playsInline preload="metadata" src={reel.media_url} style={{ width: 64, height: 64, objectFit: "cover", borderRadius: 8, flex: "none" }} aria-label="Video preview" />
                     ) : (
                       <span className="r2ac-ph" aria-hidden="true">
                         {(reel.caption ?? reel.id).replace(/^[^A-Za-z0-9]+/, "").charAt(0).toUpperCase() || "R"}
