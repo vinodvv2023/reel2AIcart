@@ -6,7 +6,7 @@ import { redirect } from "@remix-run/node";
 // produces a code exchange → token upsert in shops.
 export async function loader({ request }: LoaderFunctionArgs) {
   const shop = new URL(request.url).searchParams.get("shop") ?? "";
-  if (!shop) return redirect("/connect");
+  if (!shop || shop === "unknown shop") return redirect("/connect");
   const params = new URLSearchParams({
     client_id: process.env.SHOPIFY_API_KEY ?? "",
     scope: "read_products,read_inventory,read_content,write_content,read_orders",

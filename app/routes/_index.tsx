@@ -65,7 +65,11 @@ export default function Home() {
       <p style={{ marginTop: 16 }}>
         <a href="/connect" style={{ color: "#FF7A5C" }}>Connect Instagram →</a>
         {" · "}
-        <a href={`/auth/login?shop=${encodeURIComponent(shop)}`} target="_top">Reconnect store →</a>
+        {shop !== "unknown shop" ? (
+          <a href={`/auth/login?shop=${encodeURIComponent(shop)}`} target="_top">Reconnect store →</a>
+        ) : (
+          <small>Open this page from Apps in your store admin to enable reconnect.</small>
+        )}
       </p>
       <section style={{ ...card, marginTop: 12 }}>
         <h3>Recent webhook deliveries</h3>
