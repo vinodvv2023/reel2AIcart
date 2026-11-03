@@ -39,8 +39,13 @@ async function shopProducts(): Promise<{ products: Product[]; error: string | nu
       { headers: { "X-Shopify-Access-Token": shops[0].access_token } },
     );
     if (!r.ok) return { products: [], error: `Shopify API ${r.status} - re-authorize the store.` };
-    const { products } = (await r.json()) as { products: Product[] };
-    return { products, error: null };
+    const { products } = (await r.json()) as {
+      products: (Omit<Product, "image"> & { image?: { src?: string } | null })[];
+    };
+    return {
+      products: products.map((p) => ({ ...p, image: p.image?.src })),
+      error: null,
+    };
   } catch {
     return { products: [], error: "Shopify API unreachable." };
   }
@@ -122,6 +127,7 @@ export default function Connect() {
         .r2ac-row{display:flex;gap:10px;align-items:center;border-radius:10px;padding:8px;margin-top:8px}
         .r2ac-a{background:#fdf3ec}.r2ac-b{background:#eef6f5}
         .r2ac-row img{width:64px;height:64px;object-fit:cover;border-radius:8px;flex:none}
+        .r2ac-ph{width:64px;height:64px;border-radius:8px;flex:none;background:#f3ddd2;color:#0f4c4a;font-weight:700;font-size:24px;display:flex;align-items:center;justify-content:center}
         .btn{display:inline-block;border-radius:999px;padding:10px 18px;font-weight:600;font-size:15px;cursor:pointer;text-decoration:none;border:1px solid transparent;transition:background-color 200ms,color 200ms}
         .btn-primary{background:#0f4c4a;color:#fff}.btn-primary:hover{background:#0d3f3d}.btn-primary:active{transform:scale(.98)}
         .btn-ghost{background:#fff;border-color:#0f4c4a;color:#0f4c4a}.btn-ghost:hover{background:#eef6f5}.btn-ghost:active{transform:scale(.98)}
@@ -174,7 +180,13 @@ export default function Connect() {
                 {reels.map((reel, i) => (
                   <label key={reel.id} className={`r2ac-row ${i % 2 ? "r2ac-b" : "r2ac-a"}`}>
                     <input type="radio" name="mediaId" value={reel.id} form="tagform" required />
-                    {reel.thumbnail_url && <img src={reel.thumbnail_url} alt="" loading="lazy" />}
+                    {reel.thumbnail_url ? (
+                      <img src={reel.thumbnail_url} alt="" loading="lazy" />
+                    ) : (
+                      <span className="r2ac-ph" aria-hidden="true">
+                        {(reel.caption ?? reel.id).replace(/^[^A-Za-z0-9]+/, "").charAt(0).toUpperCase() || "R"}
+                      </span>
+                    )}
                     <span>
                       <strong>{reel.caption?.slice(0, 80) || "(no caption)"}</strong>
                       <br />
@@ -202,7 +214,13 @@ export default function Connect() {
               </Form>
               {products.map((p, i) => (
                 <div key={p.id} className={`r2ac-row ${i % 2 ? "r2ac-b" : "r2ac-a"}`}>
-                  {p.image && <img src={p.image} alt="" loading="lazy" />}
+                  {p.image ? (
+                    <img src={p.image} alt="" loading="lazy" />
+                  ) : (
+                    <span className="r2ac-ph" aria-hidden="true">
+                      {p.title.charAt(0).toUpperCase()}
+                    </span>
+                  )}
                   <span style={{ flex: 1 }}>
                     <strong>{p.title}</strong>
                     <br />
