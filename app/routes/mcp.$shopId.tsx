@@ -87,6 +87,9 @@ export async function action({ request, params }: ActionFunctionArgs) {
     return json({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "parse error" } });
   }
   const id = body?.id ?? null;
+  // Notifications carry no id and take no response (MCP spec) — a strict
+  // client may abort init if we answer one with a JSON-RPC error body.
+  if (body && !("id" in body)) return new Response(null, { status: 202 });
   const ok = (result: unknown) => json({ jsonrpc: "2.0", id, result });
   const err = (code: number, message: string) => json({ jsonrpc: "2.0", id, error: { code, message } });
   try {
