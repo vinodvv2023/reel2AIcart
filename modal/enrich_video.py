@@ -26,7 +26,9 @@ def enrich_video(video_url: str, hero_images: list[str], shop: str = "", product
         # Resolve product video via Shopify product-media GraphQL using the
         # stored shop token. Runs here (not in ingest) because only this
         # function reliably receives the neon secret.
-        video_url = _product_video_url(shop, product_id)
+        video_url, handle = _product_media(shop, product_id)
+    else:
+        handle = _product_handle(shop, product_id)
     if not video_url and not hero_images:
         print(f"[enrich] skip shop={shop} product={product_id}: no media")
         return {"video_hash": "", "status": "skipped", "reason": "no media"}
@@ -35,6 +37,10 @@ def enrich_video(video_url: str, hero_images: list[str], shop: str = "", product
     summary = _vision_summary(video_url, hero_images, shop, product_id, vision)
     embedding, embed_tag = _embed_for(video_url + "|" + summary["text_seed"], embed)
     summary["providers"] = {"vision": summary.pop("provider"), "embed": embed_tag}
+    pdp_url = f"https://{shop}/products/{handle}" if shop and handle else (f"https://{shop}/products" if shop else "")
+    summary["pdp_url"] = pdp_url
+    for entry in summary.get("timeline", []):
+        entry["pdp_url"] = entry.get("pdp_url") or pdp_url
     print(f"[enrich] shop={shop} product={product_id} vision={summary['providers']['vision']} embed={embed_tag} dims={len(embedding)} looks={len(summary['timeline'])}")
     conn = psycopg2.connect(os.environ["DATABASE_URL"])
     cur = conn.cursor()
@@ -308,24 +314,31 @@ def ingest(payload: dict) -> dict:
     return {"ok": True, "spawned": True}
 
 
-def _product_video_url(shop: str, product_id) -> str:
-    """First external_video/media URL on the product, else ''."""
+def _shop_token(shop: str):
+    """Stored OAuth token for a shop, or ''."""
     import os
     import psycopg2
 
-    if not shop or not product_id:
+    if not shop:
         return ""
     conn = psycopg2.connect(os.environ["DATABASE_URL"])
     cur = conn.cursor()
     cur.execute("SELECT access_token FROM shops WHERE shop = %s", (shop,))
     row = cur.fetchone()
     conn.close()
-    if not row:
-        print(f"[media] no token for shop={shop}")
-        return ""
+    return row[0] if row else ""
+
+
+def _product_media(shop: str, product_id) -> tuple[str, str]:
+    """(first video/media URL, product handle) via Shopify GraphQL, else ('','')."""
+    token = _shop_token(shop)
+    if not token or not product_id:
+        if shop and not token:
+            print(f"[media] no token for shop={shop}")
+        return "", ""
     import httpx
 
-    query = """{ product(id: "%s") { media(first: 10) { edges {
+    query = """{ product(id: "%s") { handle media(first: 10) { edges {
       node { ... on ExternalVideo { embeddedUrl originUrl }
              ... on Video { sources { url } }
              ... on MediaImage { image { url } } } } } } }""" % (
@@ -334,20 +347,28 @@ def _product_video_url(shop: str, product_id) -> str:
     try:
         r = httpx.post(
             f"https://{shop}/admin/api/2026-10/graphql.json",
-            headers={"X-Shopify-Access-Token": row[0], "Content-Type": "application/json"},
+            headers={"X-Shopify-Access-Token": token, "Content-Type": "application/json"},
             json={"query": query},
             timeout=15,
         )
-        edges = r.json()["data"]["product"]["media"]["edges"]
+        product = r.json()["data"]["product"]
+        handle = product.get("handle", "") or ""
+        edges = product["media"]["edges"]
     except Exception as exc:
         print(f"[media] graphql failed shop={shop}: {exc}")
-        return ""
+        return "", ""
     for e in edges:
         node = e.get("node", {})
         url = node.get("embeddedUrl") or node.get("originUrl") or ""
         if url:
-            return url
+            return url, handle
         for s in node.get("sources", []):
             if s.get("url"):
-                return s["url"]
-    return ""
+                return s["url"], handle
+    return "", handle
+
+
+def _product_handle(shop: str, product_id) -> str:
+    """Product handle when video_url arrived directly (no media lookup needed)."""
+    url, handle = _product_media(shop, product_id)
+    return handle
