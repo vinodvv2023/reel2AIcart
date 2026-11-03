@@ -24,7 +24,7 @@ export default function handleRequest(
     return Promise.resolve(
       new Response(
         JSON.stringify({
-          resource: `${url.origin}/mcp/${wellKnown[1]}`,
+          resource: `${url.origin}/${wellKnown[1]}`,
           authorization_servers: [],
         }),
         { headers: { "Content-Type": "application/json" } }
