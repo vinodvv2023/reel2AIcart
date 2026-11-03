@@ -9,22 +9,25 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const shop = url.searchParams.get("shop") ?? "unknown shop";
   let counts = { videos: -1, products: -1 };
   let events: { topic: string; status: string; detail: string; created_at: string }[] = [];
+  let installed: { shop: string; scopes: string }[] = [];
   try {
     const sql = db();
-    const [v, p, e] = await Promise.all([
+    const [v, p, e, s] = await Promise.all([
       sql`SELECT COUNT(*)::int AS n FROM video_cache`,
       sql`SELECT COUNT(*)::int AS n FROM video_embeddings`,
       sql`SELECT topic, status, detail, created_at::text AS created_at FROM webhook_events ORDER BY id DESC LIMIT 10`,
+      sql`SELECT shop, scopes FROM shops ORDER BY installed_at DESC`,
     ]);
     counts = {
       videos: (v as { n: number }[])[0]?.n ?? -1,
       products: (p as { n: number }[])[0]?.n ?? -1,
     };
     events = e as typeof events;
+    installed = s as typeof installed;
   } catch {
     // DB unreachable — page still renders, counts show as unavailable.
   }
-  return json({ shop, counts, modal: process.env.MODAL_WEBHOOK_URL ?? null, events });
+  return json({ shop, counts, modal: process.env.MODAL_WEBHOOK_URL ?? null, events, installed });
 }
 
 const card: React.CSSProperties = {
@@ -35,14 +38,32 @@ const card: React.CSSProperties = {
 };
 
 export default function Home() {
-  const { shop, counts, modal, events } = useLoaderData<typeof loader>();
+  const { shop, counts, modal, events, installed } = useLoaderData<typeof loader>();
   const ok = (n: number) => (n >= 0 ? String(n) : "unavailable");
+  const known = shop !== "unknown shop";
   return (
     <main style={{ padding: 24, fontFamily: "system-ui", background: "#faf8f4", minHeight: "100vh" }}>
       <h1 style={{ color: "#0F4C4A" }}>Reel2AICart</h1>
       <p>
         Installed on <strong>{shop}</strong>
+        {!known && (
+          <small>
+            {" "}(opened directly - Shopify passes ?shop= inside admin; tenant below is from the installs table)
+          </small>
+        )}
       </p>
+      {!known && installed.length > 0 && (
+        <p>
+          <small>
+            Installed tenants:{" "}
+            {installed.map((s) => (
+              <span key={s.shop}>
+                <a href={`/?shop=${encodeURIComponent(s.shop)}`}>{s.shop}</a> ({s.scopes || "no scopes recorded"}){" "}
+              </span>
+            ))}
+          </small>
+        </p>
+      )}
       <section style={{ display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", marginTop: 16 }}>
         <div style={card}>
           <h3>Video cache</h3>
