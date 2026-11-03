@@ -1,9 +1,3 @@
 {
-  "crons": [{ "path": "/api/attribute-orders", "schedule": "*/15 * * * *" }],
-  "rewrites": [
-    {
-      "source": "/.well-known/oauth-protected-resource/:shop",
-      "destination": "/api/oauth-discovery?shop=:shop"
-    }
-  ]
+  "crons": [{ "path": "/api/attribute-orders", "schedule": "*/15 * * * *" }]
 }

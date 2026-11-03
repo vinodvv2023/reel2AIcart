@@ -12,6 +12,22 @@ export default function handleRequest(
   responseHeaders: Headers,
   remixContext: EntryContext
 ) {
+  // RFC 9728 discovery for MCP OAuth probing. Handled here (not a route)
+  // because Remix flat routes cannot match a leading-dot segment and Vercel
+  // reserves /.well-known against rewrites. Reads are public: advertise the
+  // resource with no authorization servers so strict clients proceed.
+  const wellKnown = new URL(request.url).pathname.match(
+    /^\/.well-known\/oauth-protected-resource\/(.+)$/
+  );
+  if (wellKnown && request.method === "GET") {
+    const url = new URL(request.url);
+    return Promise.resolve(
+      Response.json({
+        resource: `${url.origin}/mcp/${wellKnown[1]}`,
+        authorization_servers: [],
+      })
+    );
+  }
   return new Promise((resolve, reject) => {
     const { pipe, abort } = renderToPipeableStream(
       <RemixServer context={remixContext} url={request.url} />,
