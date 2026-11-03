@@ -1,10 +1,13 @@
-import type { LoaderFunctionArgs } from "@remix-run/node";
+import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { json } from "@remix-run/node";
 import { db } from "~/lib/db";
 import { textEmbedding, toVectorLiteral } from "~/lib/video/embed";
+import { TOOLS, callTool } from "~/lib/mcp/tools";
 
 // PRD §7: MCP at /mcp/{shop_id} — 4 tools, Edge, Neon reads only, no vision.
 // search_products | get_product_details | get_inventory | get_video_summary
+// GET = legacy query-param shape. POST = MCP Streamable HTTP (JSON-RPC)
+// for Claude Connectors: initialize, ping, tools/list, tools/call.
 export async function loader({ request, params }: LoaderFunctionArgs) {
   const url = new URL(request.url);
   const tool = url.searchParams.get("tool") ?? "search_products";
@@ -74,4 +77,33 @@ async function bgeQuery(text: string): Promise<string | null> {
 
 // get_product_details + get_inventory read Shopify cache in Neon (stub)
   return json({ shop: params.shopId, tool, ok: true });
+}
+
+export async function action({ request, params }: ActionFunctionArgs) {
+  let body: { id?: unknown; method?: string; params?: { name?: string; arguments?: Record<string, unknown> } };
+  try {
+    body = (await request.json()) as typeof body;
+  } catch {
+    return json({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "parse error" } });
+  }
+  const id = body?.id ?? null;
+  const ok = (result: unknown) => json({ jsonrpc: "2.0", id, result });
+  const err = (code: number, message: string) => json({ jsonrpc: "2.0", id, error: { code, message } });
+  try {
+    if (body?.method === "initialize")
+      return ok({
+        protocolVersion: "2024-11-05",
+        capabilities: { tools: {} },
+        serverInfo: { name: "reel2aicart", version: "1.0.0" },
+      });
+    if (body?.method === "ping") return ok({});
+    if (body?.method === "tools/list") return ok({ tools: TOOLS });
+    if (body?.method === "tools/call") {
+      const result = await callTool(params.shopId ?? "", String(body.params?.name ?? ""), body.params?.arguments ?? {});
+      return ok({ content: [{ type: "text", text: JSON.stringify(result) }] });
+    }
+    return err(-32601, `unknown method: ${body?.method}`);
+  } catch (e) {
+    return err(-32603, e instanceof Error ? e.message : "tool failed");
+  }
 }
