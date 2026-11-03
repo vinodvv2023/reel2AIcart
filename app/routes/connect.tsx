@@ -137,6 +137,10 @@ export default function Connect() {
         :focus-visible{outline:2px solid #ff7a5c;outline-offset:2px}
         .r2ac-pager{display:flex;gap:10px;align-items:center;margin-top:12px}
         .r2ac-ok{color:#0f4c4a}.r2ac-err{color:#b3402a}
+        .r2ac-modal{display:none}
+        .r2ac-modal:target{display:flex;position:fixed;inset:0;background:rgba(20,20,19,.45);z-index:50;padding:24px}
+        .r2ac-modal .r2ac-box{background:#fff;border-radius:12px;padding:20px;max-width:480px;width:100%;margin:auto}
+        .r2ac-box h3{margin:0 0 8px;color:#0f4c4a}
       `}</style>
 
       <header className="r2ac-brand" aria-label="Reel2AICart">
@@ -226,7 +230,7 @@ export default function Connect() {
                     <br />
                     <small>{p.variants.length} variant(s)</small>
                   </span>
-                  <a className="btn btn-ghost" href={qs({ ...keep, product: String(p.id), pg: "1" })}>Select</a>
+                  <a className="btn btn-ghost" href={qs({ ...keep, product: String(p.id), pg: "1" }) + "#pick"}>Select</a>
                 </div>
               ))}
               {products.length === 0 && <p><small>No products match this search.</small></p>}
@@ -236,16 +240,33 @@ export default function Connect() {
                 <a className="btn btn-ghost" aria-disabled={page >= pages} href={page >= pages ? "#" : qs({ ...keep, pg: String(page + 1) })}>Next</a>
               </div>
               {selected && (
-            <fieldset style={{ marginTop: 12 }}>
-              <legend>Variant of {selected.title}</legend>
-              <p><small>Sent as the Meta catalog product ID, synced from Shopify by the Facebook and Instagram sales channel.</small></p>
-                  {selected.variants.map((v) => (
-                    <label key={v.id} style={{ display: "block", marginTop: 6 }}>
-                      <input type="radio" name="variantId" value={v.id} form="tagform" required />{" "}
-                      {v.title} - ${v.price} <small>({v.id})</small>
-                    </label>
-                  ))}
-                </fieldset>
+                <div id="pick" className="r2ac-modal" role="dialog" aria-label={`Variants of ${selected.title}`}>
+                  <div className="r2ac-box">
+                    <h3>Variant of {selected.title}</h3>
+                    <p><small>Sent as the Meta catalog product ID, synced from Shopify by the Facebook and Instagram sales channel.</small></p>
+                    {selected.variants.length === 1 ? (
+                      <>
+                        <input type="hidden" name="variantId" value={selected.variants[0].id} form="tagform" />
+                        <p>
+                          Only variant: <strong>{selected.variants[0].title}</strong> - $
+                          {selected.variants[0].price} (auto-selected)
+                        </p>
+                      </>
+                    ) : (
+                      <div role="radiogroup" aria-label="Variants">
+                        {selected.variants.map((v) => (
+                          <label key={v.id} style={{ display: "block", marginTop: 6 }}>
+                            <input type="radio" name="variantId" value={v.id} form="tagform" required />{" "}
+                            {v.title} - ${v.price} <small>({v.id})</small>
+                          </label>
+                        ))}
+                      </div>
+                    )}
+                    <p style={{ marginTop: 12 }}>
+                      <a className="btn btn-primary" href="#">Done</a>
+                    </p>
+                  </div>
+                </div>
               )}
             </>
           )}
