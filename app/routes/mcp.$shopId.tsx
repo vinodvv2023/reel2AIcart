@@ -92,7 +92,14 @@ export async function action({ request, params }: ActionFunctionArgs) {
   try {
     if (body?.method === "initialize")
       return ok({
-        protocolVersion: "2024-11-05",
+        // Negotiate: our messages are version-independent JSON-RPC, so meet
+        // the client on any version we speak; strict clients (ChatGPT) drop
+        // servers that answer an older version than requested.
+        protocolVersion: ["2024-11-05", "2025-03-26", "2025-06-18"].includes(
+          String((body.params as { protocolVersion?: unknown } | undefined)?.protocolVersion ?? ""),
+        )
+          ? String((body.params as { protocolVersion?: unknown }).protocolVersion)
+          : "2024-11-05",
         capabilities: { tools: {} },
         serverInfo: { name: "reel2aicart", version: "1.0.0" },
       });
