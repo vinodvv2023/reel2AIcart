@@ -22,10 +22,13 @@ export default function handleRequest(
   if (wellKnown && request.method === "GET") {
     const url = new URL(request.url);
     return Promise.resolve(
-      Response.json({
-        resource: `${url.origin}/mcp/${wellKnown[1]}`,
-        authorization_servers: [],
-      })
+      new Response(
+        JSON.stringify({
+          resource: `${url.origin}/mcp/${wellKnown[1]}`,
+          authorization_servers: [],
+        }),
+        { headers: { "Content-Type": "application/json" } }
+      )
     );
   }
   return new Promise((resolve, reject) => {
