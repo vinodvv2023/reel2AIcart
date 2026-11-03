@@ -1,0 +1,65 @@
+openapi: 3.1.0
+info:
+  title: Reel2AICart Agent API
+  version: 1.0.0
+  description: Shoppable-video commerce search for one Shopify store. Read-only.
+servers:
+  - url: https://reel2-aicart.vercel.app
+paths:
+  /mcp/{shopId}:
+    get:
+      operationId: searchProducts
+      summary: Vector-ranked product search over shoppable videos
+      parameters:
+        - $ref: "#/components/parameters/ShopId"
+        - name: tool
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [search_products, get_product_details, get_inventory, get_video_summary]
+        - name: query
+          in: query
+          schema:
+            type: string
+          description: Natural-language product query, e.g. "maroon gown"
+        - name: video_id
+          in: query
+          schema:
+            type: string
+          description: Required when tool=get_video_summary
+      responses:
+        "200":
+          description: Tool result (results array, rerank mode, shop echo)
+          content:
+            application/json:
+              schema:
+                type: object
+  /api/video-summary:
+    get:
+      operationId: getVideoSummary
+      summary: Cached video summary, no vision call
+      parameters:
+        - name: video_id
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Cached summary JSON
+          content:
+            application/json:
+              schema:
+                type: object
+        "404":
+          description: Unknown video_id
+components:
+  parameters:
+    ShopId:
+      name: shopId
+      in: path
+      required: true
+      schema:
+        type: string
+      example: reel2aicart-test.myshopify.com
