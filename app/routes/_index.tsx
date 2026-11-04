@@ -11,6 +11,10 @@ type Ready = { shop: string; token_ok: boolean; missing_scopes: string; mcp: str
 export async function loader({ request }: LoaderFunctionArgs) {
   const url = new URL(request.url);
   const shop = url.searchParams.get("shop") ?? "unknown shop";
+  const recheck = {
+    ok: url.searchParams.get("recheck_ok") ?? "",
+    msg: url.searchParams.get("recheck_msg") ?? "",
+  };
   let counts = { videos: -1, products: -1 };
   let events: { topic: string; status: string; detail: string; created_at: string }[] = [];
   let installed: { shop: string; scopes: string }[] = [];
@@ -39,11 +43,11 @@ export async function loader({ request }: LoaderFunctionArgs) {
   } catch {
     // DB unreachable — page still renders, counts show as unavailable.
   }
-  return json({ shop, counts, modal: process.env.MODAL_WEBHOOK_URL ?? null, events, installed, job, readiness });
+  return json({ shop, counts, modal: process.env.MODAL_WEBHOOK_URL ?? null, events, installed, job, readiness, recheck });
 }
 
 export default function Home() {
-  const { shop, counts, modal, events, installed, job, readiness } = useLoaderData<typeof loader>();
+  const { shop, counts, modal, events, installed, job, readiness, recheck } = useLoaderData<typeof loader>();
   const ok = (n: number) => (n >= 0 ? String(n) : "unavailable");
   const known = shop !== "unknown shop";
   const scanShop = known ? shop : installed[0]?.shop ?? "";
@@ -139,6 +143,11 @@ export default function Home() {
       </section>
       <section className="r2ac-card" style={{ marginTop: 12 }}>
         <h3>Store readiness (webMCP)</h3>
+        {recheck.msg && (
+          <p role="status" className={recheck.ok === "1" ? "r2ac-ok" : "r2ac-err"}>
+            <small>{recheck.msg}</small>
+          </p>
+        )}
         {readiness.length === 0 ? (
           <p><small>No checks yet - install or re-authorize a store, or Re-check below.</small></p>
         ) : (
