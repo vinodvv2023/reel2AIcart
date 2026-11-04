@@ -222,13 +222,14 @@ export default function Home() {
         <p><small>Vector search over your shoppable videos, answered with PDP links.</small></p>
         <Form method="get" action="/agent" aria-label="Quick product search">
           <input type="hidden" name="tab" value="search" />
+          {known && <input type="hidden" name="shop" value={shop} />}
           <label htmlFor="fabq"><strong>Search</strong></label><br />
           <input id="fabq" name="q" type="search" required placeholder="e.g. ballerina" />{" "}
           <button type="submit" className="btn btn-primary">Go</button>
         </Form>
         <p style={{ marginBottom: 0 }}>
           <small>
-            <a href="/agent">Open full chat</a> ·{" "}
+            <a href={known ? `/agent?shop=${encodeURIComponent(shop)}` : "/agent"}>Open full chat</a> ·{" "}
             <label htmlFor="r2ac-agent-toggle" style={{ cursor: "pointer", textDecoration: "underline" }}>Close</label>
           </small>
         </p>

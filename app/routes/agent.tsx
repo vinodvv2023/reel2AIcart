@@ -67,7 +67,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
     const out = (await callTool(await shopOf(), "search_products", { query: q })) as { results: typeof results };
     results = (out.results ?? []).slice(0, 8);
   }
-  return json({ tab, q, results });
+  const shop = params.get("shop") ?? "";
+  return json({ tab, q, results, shop });
 }
 
 export async function action({ request }: ActionFunctionArgs) {
@@ -123,7 +124,7 @@ export async function action({ request }: ActionFunctionArgs) {
 const inputStyle = { padding: "9px 12px", fontSize: 16, borderRadius: 8, border: "1px solid #e8e2da", color: "#141413", background: "#fff" } as const;
 
 export default function Agent() {
-  const { tab, q: sq, results } = useLoaderData<typeof loader>();
+  const { tab, q: sq, results, shop } = useLoaderData<typeof loader>();
   const result = useActionData<typeof action>();
   const thread: Thread = result && "hist" in result ? (result.hist as Thread) : [];
   return (
@@ -134,6 +135,9 @@ export default function Agent() {
         </span>
         <strong style={{ fontSize: 22, color: "#0f4c4a" }}>Reel2<span style={{ color: "#ff7a5c" }}>AI</span>Cart assistant</strong>
       </header>
+      <p style={{ marginTop: 12 }}>
+        <a href={shop && shop !== "unknown shop" ? `/?shop=${encodeURIComponent(shop)}` : "/"} style={{ borderRadius: 999, padding: "8px 16px", fontWeight: 600, textDecoration: "none", background: "#fff", color: "#0f4c4a", border: "1px solid #0f4c4a" }}>Back to dashboard</a>
+      </p>
       <nav aria-label="Agent modes" style={{ display: "flex", gap: 8, marginTop: 12 }}>
         <a href="/agent?tab=ask" style={{ borderRadius: 999, padding: "8px 16px", fontWeight: 600, textDecoration: "none", background: tab === "ask" ? "#0f4c4a" : "#fff", color: tab === "ask" ? "#fff" : "#0f4c4a", border: "1px solid #0f4c4a" }}>Ask</a>
         <a href="/agent?tab=search" style={{ borderRadius: 999, padding: "8px 16px", fontWeight: 600, textDecoration: "none", background: tab === "search" ? "#0f4c4a" : "#fff", color: tab === "search" ? "#fff" : "#0f4c4a", border: "1px solid #0f4c4a" }}>Search</a>
