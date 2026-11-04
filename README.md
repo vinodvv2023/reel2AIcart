@@ -4,6 +4,8 @@
 > **humans shop from video** and **AI agents shop for humans**.
 > Built with Muse Spark Open. Stack: **Vercel (Remix) + Modal (GPU) + Neon Postgres + pgvector**.
 
+> ⚠️ **Distribution status: private (unpublished).** Reel2AICart is **not listed** on the Shopify App Store and the Meta App is in **development mode** — you cannot find either by search. Install via the direct install link from the Shopify Partners dashboard (test/dev store) and invite-only Meta App roles. Public listing on both platforms is pending app review.
+
 ## What it is
 
 - **Shoppable video:** Instagram Reels / YouTube Shorts and Shopify product videos are analyzed **once per video** (offline), cached, and served as timeline-tagged products on the PDP and on Instagram itself.
@@ -140,11 +142,33 @@ npm run build
 
 These are the Shopify-side pieces the app depends on:
 
-1. **Reel2AICart custom app (this repo)** — install on the store. Grants `read_products, read_inventory, read_content, write_content, read_orders`; subscribes to product/inventory webhooks. Required for sync, enrichment triggers, and MCP data.
-2. **Facebook & Instagram sales channel** (Shopify App Store, by Meta — free) — syncs the Shopify catalog to Meta so variant IDs exist as Meta catalog product IDs (the `/connect` tag flow sends the variant ID as the Meta product ID). Connect it to the same Commerce Account + catalog as below.
+1. **Reel2AICart custom app (this repo)** — install on the store via the Partners-dashboard install link (private distribution, see banner above). Grants `read_products, read_inventory, read_content, write_content, read_orders`; subscribes to product/inventory webhooks. Required for sync, enrichment triggers, and MCP data.
+2. **Facebook & Instagram sales channel** (public, Shopify App Store, by Meta — free) — this is the bridge that syncs your Shopify catalog to Meta. Reel2AICart depends on it: the `/connect` tag flow sends the Shopify **variant ID as the Meta catalog product ID**, so tagging only works if this channel has synced that variant into the Meta catalog. See §2a below for the full connect walkthrough.
 3. **Theme App Extension** (`extensions/shoppable-video-widget/`) — shipped in this repo via `shopify.app.toml`. After deploy: Online Store → Themes → Customize → App embeds/blocks → enable the Reel2AICart shoppable video block on PDPs. It reads timeline JSON from the Vercel API.
 4. **Products with media** — upload at least one video (or external/YouTube video) or hero images per product; enrichment resolves media via product-media GraphQL and falls back to hero images.
 5. **Checkout note attributes** — the widget appends `note_attributes[_shopify_video]` to the cart so `/api/attribute-orders` (cron) can write `order_attribution` rows visible in Shopify Analytics via UTM params.
+
+### 2a. Connecting "Facebook & Instagram by Meta" (step-by-step)
+
+In Shopify admin: **Settings → Apps and sales channels → Shopify App Store → search `facebook & instagram by meta`** (publisher **Meta**, free) → **Install**.
+
+The onboarding wizard then connects, in order:
+
+1. **Connect Facebook account** — log in with a Facebook user that has admin on the Business Manager. Grant the requested permissions (manage Business assets, catalog, Page, Instagram account, ads — the channel cannot sync or tag without them; if you decline any, go back and re-grant or sync/tagging silently fails).
+2. **Select Business Manager** — pick the Business that owns the store's Page, catalog, and Commerce Account.
+3. **Connect Page + Instagram** — select the Facebook Page and the linked Instagram professional (Business/Creator) account shoppers will see tags on.
+4. **Connect Commerce Account + catalog** — select (or create) the Commerce Account and the catalog the channel syncs products into. **Use the same Commerce Account + catalog as the Meta setup below** — mismatched accounts are the #1 cause of `IE_30007` / "Failed to Replace Commerce Account" loops.
+5. **Ad account + Meta Pixel + data sharing** — select the ad account, enable the Pixel, and set data sharing to **Maximum** so checkout/video-attribution events flow back (feeds the `order_attribution` / UTM reporting in §What it solves #5).
+6. **Domain verification** — verify the store domain when prompted (fixes `IE_30002` domain-mismatch errors).
+7. **Review + accept terms** — finish; catalog sync starts (can take minutes–hours for large catalogs).
+
+What must be **enabled/healthy for Reel2AICart to function**:
+
+- [ ] Channel status **Active** (Apps and sales channels → Facebook & Instagram shows connected, no error banner).
+- [ ] Catalog sync complete — the variant you want to tag appears in Commerce Manager with a content ID equal to the Shopify variant ID.
+- [ ] Commerce Account **approved** (not under review — under review gives `IE_30010`; on-site widget + YouTube keep working meanwhile).
+- [ ] Instagram account is **Professional** and linked to the Page; product tagging renders **mobile-app only**.
+- [ ] Products in stock and compliant with Meta Commerce Policies, store in a supported market — otherwise tags are rejected even with everything else green.
 
 ## Configure Facebook / Meta (necessary apps + setup)
 
@@ -160,7 +184,7 @@ Instagram tagging goes through Meta — set these up once per merchant:
 3. **Commerce Account + catalog (Commerce Manager** ([business.facebook.com/commerce](https://business.facebook.com/commerce)**)):**
    - Create a Commerce Account → attach the catalog synced by the Shopify Facebook & Instagram channel → submit for review.
    - `IE_30007` = catalog not approved → fix here. `IE_30010` = account under review → keep selling via the on-site widget + YouTube meanwhile (the app shows this message instead of the raw `{{IE_…}}` placeholder).
-   - Install the **Facebook & Instagram** sales channel in Shopify and connect it to this same Commerce Account.
+   - Connect the **Facebook & Instagram** sales channel in Shopify to this same Commerce Account (walkthrough in §2a above).
 4. **System-user token (recommended — never expires):**
    - Business Settings → System Users → Admin system user → Add assets (Page, IG account, catalog, App) → Generate token with the scopes above → set as `META_GRAPH_TOKEN`.
    - Fallback: short-lived user token exchanged to 60-day via `META_APP_ID/SECRET` (the app only needs this for the exchange path).
