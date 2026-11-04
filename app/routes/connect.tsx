@@ -268,22 +268,26 @@ export default function Connect() {
                 <input type="hidden" name="rpg" value={String(rPage)} />
                 <button type="submit" className="btn btn-ghost">Search</button>
               </Form>
-              {products.map((p, i) => (
-                <div key={p.id} className={`r2ac-row ${i % 2 ? "r2ac-b" : "r2ac-a"}`}
-                  style={String(p.id) === productId ? { border: "2px solid #0f4c4a" } : undefined}>
-                  {p.image ? (
-                    <img src={p.image} alt="" loading="lazy" />
-                  ) : (
-                    <span className="r2ac-ph" aria-hidden="true">{p.title.charAt(0).toUpperCase()}</span>
-                  )}
-                  <span style={{ flex: 1 }}>
-                    <strong>{String(p.id) === productId ? "✓ " : ""}{p.title}</strong>
-                    <br />
-                    <small>{p.variants.length} variant(s)</small>
-                  </span>
-                  <a className="btn btn-ghost" href={qs({ ...keep, product: String(p.id), variant: "", pg: "1" }) + "#pick"}>Select</a>
-                </div>
-              ))}
+              {products.map((p, i) => {
+                const on = String(p.id) === productId;
+                return (
+                  <a key={p.id} href={qs({ ...keep, product: String(p.id), variant: "", pg: "1" }) + "#pick"}
+                    aria-current={on || undefined}
+                    className={`r2ac-row ${i % 2 ? "r2ac-b" : "r2ac-a"}`}
+                    style={{ textDecoration: "none", color: "inherit", border: on ? "2px solid #0f4c4a" : "2px solid transparent" }}>
+                    {p.image ? (
+                      <img src={p.image} alt="" loading="lazy" />
+                    ) : (
+                      <span className="r2ac-ph" aria-hidden="true">{p.title.charAt(0).toUpperCase()}</span>
+                    )}
+                    <span style={{ flex: 1 }}>
+                      <strong>{on ? "✓ " : ""}{p.title}</strong>
+                      <br />
+                      <small>{p.variants.length} variant(s)</small>
+                    </span>
+                  </a>
+                );
+              })}
               {products.length === 0 && <p><small>No products match this search.</small></p>}
               <div className="r2ac-pager">
                 <a className="btn btn-ghost" aria-disabled={page <= 1} href={page <= 1 ? "#" : qs({ ...keep, pg: String(page - 1) })}>Prev</a>
@@ -322,31 +326,37 @@ export default function Connect() {
 
       <section className="r2ac-card" style={{ marginTop: 20 }} aria-label="Review and tag">
         <h2>3. Review and tag</h2>
-        <table style={{ borderCollapse: "collapse", width: "100%", marginTop: 8 }}>
-          <tbody>
-            <tr>
-              <th scope="row" style={{ textAlign: "left", padding: "6px 12px 6px 0", verticalAlign: "top" }}>Reel</th>
-              <td style={{ padding: "6px 0" }}>
-                {selReel ? (<><strong>{selReel.caption?.slice(0, 80) || "(no caption)"}</strong><br /><small>{selReel.id} · {selReel.timestamp?.slice(0, 10)}</small> <a href={qs({ q, rq, product: productId, variant: variantId, pg: String(page), rpg: String(rPage) })}>Clear</a></>) : (<small>Not picked yet - choose left.</small>)}
-              </td>
-            </tr>
-            <tr>
-              <th scope="row" style={{ textAlign: "left", padding: "6px 12px 6px 0", verticalAlign: "top" }}>Product</th>
-              <td style={{ padding: "6px 0" }}>
-                {selProduct ? (<><strong>{selProduct.title}</strong> <a href={qs({ q, rq, reel: reelId, pg: String(page), rpg: String(rPage) })}>Clear</a></>) : (<small>Not picked yet - choose right.</small>)}
-              </td>
-            </tr>
-            <tr>
-              <th scope="row" style={{ textAlign: "left", padding: "6px 12px 6px 0", verticalAlign: "top" }}>Variant</th>
-              <td style={{ padding: "6px 0" }}>
-                {selVariant ? (<><strong>{selVariant.title}</strong> - ${selVariant.price} <small>({selVariant.id})</small> <a href={qs({ q, rq, product: productId, reel: reelId, pg: String(page), rpg: String(rPage) })}>Clear</a></>) : (<small>Not picked yet.</small>)}
-              </td>
-            </tr>
-          </tbody>
-        </table>
-        <p>
-          <small><a href={qs({ q, rq, pg: String(page), rpg: String(rPage) })}>Start over (clear all three)</a></small>
-        </p>
+        {(selReel || selProduct || selVariant) ? (
+          <>
+            <table style={{ borderCollapse: "collapse", width: "100%", marginTop: 8 }}>
+              <tbody>
+                {selReel && (
+                  <tr>
+                    <th scope="row" style={{ textAlign: "left", padding: "6px 12px 6px 0", verticalAlign: "top" }}>Reel</th>
+                    <td style={{ padding: "6px 0" }}>
+                      <strong>{selReel.caption?.slice(0, 80) || "(no caption)"}</strong><br /><small>{selReel.id} · {selReel.timestamp?.slice(0, 10)}</small>
+                    </td>
+                  </tr>
+                )}
+                {selProduct && (
+                  <tr>
+                    <th scope="row" style={{ textAlign: "left", padding: "6px 12px 6px 0", verticalAlign: "top" }}>Product</th>
+                    <td style={{ padding: "6px 0" }}><strong>{selProduct.title}</strong></td>
+                  </tr>
+                )}
+                {selVariant && (
+                  <tr>
+                    <th scope="row" style={{ textAlign: "left", padding: "6px 12px 6px 0", verticalAlign: "top" }}>Variant</th>
+                    <td style={{ padding: "6px 0" }}><strong>{selVariant.title}</strong> - ${selVariant.price} <small>({selVariant.id})</small></td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+            <p>
+              <small><a href={qs({ q, rq, pg: String(page), rpg: String(rPage) })}>Clear</a></small>
+            </p>
+          </>
+        ) : null}
         {complete ? (
           <Form method="post" aria-label="Tag products on the selected reel" style={{ marginTop: 12 }}>
             <input type="hidden" name="mediaId" value={reelId} />
