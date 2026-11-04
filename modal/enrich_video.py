@@ -100,24 +100,47 @@ def _vision_muse(video_url: str, hero_images: list[str]) -> dict | None:
     if not key or not base or not model:
         print("[vision:muse] missing MODEL_API_KEY/META_BASE_URL/MUSE_VISION_MODEL")
         return None
-    parts: list[dict] = [{
-        "type": "text",
-        "text": ("List each distinct product visible. Respond ONLY with JSON: "
-                 '{"products": [{"sku_hint": "short name", "detail": "color/material in 6 words"}], "scene": "one line"}.'),
-    }]
-    for u in (hero_images or [])[:3]:
-        parts.append({"type": "image_url", "image_url": {"url": u}})
+    prompt = ("List each distinct product visible. Respond ONLY with JSON: "
+              '{"products": [{"sku_hint": "short name", "detail": "color/material in 6 words"}], "scene": "one line"}.')
     if not hero_images and video_url:
-        parts[0]["text"] += f" No images provided; video URL for context only: {video_url}."
+        prompt += f" No images provided; video URL for context only: {video_url}."
+    imgs = list(hero_images or [])[:3]
+    # Meta rejects some CDN URLs outright (media_url_not_fetchable). Retry
+    # dropping one image at a time, ending text-only — first success wins.
+    for drop in range(len(imgs) + 1):
+        parts: list[dict] = [{"type": "text", "text": prompt}]
+        for u in imgs[drop:]:
+            parts.append({"type": "image_url", "image_url": {"url": u}})
+        try:
+            r = httpx.post(
+                f"{base}/chat/completions",
+                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                json={"model": model, "messages": [{"role": "user", "content": parts}],
+                      "reasoning_effort": "minimal", "max_tokens": 600},
+                timeout=120,
+            )
+            r.raise_for_status()
+            return _parse_vision(r)
+        except Exception as exc:
+            msg = str(exc)[:150]
+            body = ""
+            resp = getattr(exc, "response", None)
+            if resp is not None:
+                try:
+                    body = resp.text[:200]
+                except Exception:
+                    pass
+            print(f"[vision:muse] failed (drop={drop}): {msg} body={body}")
+            if "media_url_not_fetchable" not in body or drop >= len(imgs):
+                return None
+    return None
+
+
+def _parse_vision(r) -> dict | None:
+    """Extract the products/scene JSON from a chat completion response."""
+    import json
+
     try:
-        r = httpx.post(
-            f"{base}/chat/completions",
-            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-            json={"model": model, "messages": [{"role": "user", "content": parts}],
-                  "reasoning_effort": "minimal", "max_tokens": 600},
-            timeout=120,
-        )
-        r.raise_for_status()
         msg = r.json()["choices"][0]["message"]
         content = msg.get("content") or msg.get("reasoning_content") or ""
         if isinstance(content, list):  # content-block shape: join text parts
@@ -129,14 +152,7 @@ def _vision_muse(video_url: str, hero_images: list[str]) -> dict | None:
             raise ValueError("no products[] in response")
         return data
     except Exception as exc:
-        detail = ""
-        resp = getattr(exc, "response", None)
-        if resp is not None:
-            try:
-                detail = f" body={resp.text[:300]}"
-            except Exception:
-                pass
-        print(f"[vision:muse] failed: {str(exc)[:150]}{detail}")
+        print(f"[vision:muse] parse failed: {str(exc)[:150]}")
         return None
 
 

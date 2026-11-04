@@ -17,23 +17,32 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const shop = new URL(request.url).searchParams.get("shop") ?? "";
   let job: ScanJob | null = null;
   let frozen: { video_hash: string; url: string; vision: string }[] = [];
+  let quality: { v: string; n: number }[] = [];
   try {
     const sql = db();
-    const rows = (await (shop
-      ? sql`SELECT id, shop, status, scanned, enqueued, skipped_verified, error FROM scan_jobs WHERE shop = ${shop} ORDER BY id DESC LIMIT 1`
-      : sql`SELECT id, shop, status, scanned, enqueued, skipped_verified, error FROM scan_jobs ORDER BY id DESC LIMIT 1`)) as ScanJob[];
+    const [rows, fz, qy] = await Promise.all([
+      (async () => (await (shop
+        ? sql`SELECT id, shop, status, scanned, enqueued, skipped_verified, error FROM scan_jobs WHERE shop = ${shop} ORDER BY id DESC LIMIT 1`
+        : sql`SELECT id, shop, status, scanned, enqueued, skipped_verified, error FROM scan_jobs ORDER BY id DESC LIMIT 1`)) as ScanJob[])(),
+      sql`SELECT video_hash, summary->>'video_url' AS url, summary->'providers'->>'vision' AS vision
+        FROM video_embeddings WHERE verified ORDER BY video_hash LIMIT 50`,
+      sql`SELECT summary->'providers'->>'vision' AS v, COUNT(*)::int AS n
+        FROM video_embeddings GROUP BY 1`,
+    ]);
     job = rows[0] ?? null;
-    frozen = (await sql`SELECT video_hash, summary->>'video_url' AS url, summary->'providers'->>'vision' AS vision
-      FROM video_embeddings WHERE verified ORDER BY video_hash LIMIT 50`) as typeof frozen;
+    frozen = fz as typeof frozen;
+    quality = qy as typeof quality;
   } catch {
     // render empty on DB failure
   }
-  return json({ shop, job, frozen });
+  return json({ shop, job, frozen, quality });
 }
 
 export default function Scan() {
-  const { shop, job, frozen } = useLoaderData<typeof loader>();
+  const { shop, job, frozen, quality } = useLoaderData<typeof loader>();
   const open = job && (job.status === "queued" || job.status === "running");
+  const muse = quality.find((r) => r.v === "muse-spark-vision-v1")?.n ?? 0;
+  const heur = quality.filter((r) => r.v !== "muse-spark-vision-v1").reduce((s, r) => s + r.n, 0);
   return (
     <main className="r2ac-wrap">
       <header className="r2ac-brand" aria-label="Reel2AICart">
@@ -62,6 +71,7 @@ export default function Scan() {
           <p className="r2ac-err"><small>Scan stopped with an error: {job.error} Try again from the dashboard.</small></p>
         )}
         <p><a className="btn btn-ghost" href={shop ? `/?shop=${encodeURIComponent(shop)}` : "/"}>Back to dashboard</a></p>
+        <p><small>Vision quality across all rows: {muse} with Muse vision, {heur} heuristic fallback{muse + heur === 0 ? " (no rows yet)" : ""}.</small></p>
       </section>
       {frozen.length > 0 && (
         <section className="r2ac-card" style={{ marginTop: 12 }}>
