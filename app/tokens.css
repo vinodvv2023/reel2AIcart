@@ -43,3 +43,7 @@ label { font-weight: 600; }
 .r2ac-modal:target { display: flex; position: fixed; inset: 0; background: rgba(20,20,19,.45); z-index: 50; padding: 24px; }
 .r2ac-modal .r2ac-box { background: #fff; border-radius: 12px; padding: 20px; max-width: 480px; width: 100%; margin: auto; }
 .r2ac-box h3 { margin: 0 0 8px; color: #0f4c4a; }
+.r2ac-fab { position: fixed; right: 20px; bottom: 20px; z-index: 40; display: inline-block; border-radius: 999px; padding: 12px 20px; font-weight: 700; font-size: 15px; cursor: pointer; background: #0f4c4a; color: #fff; border: 1px solid transparent; box-shadow: 0 6px 20px rgba(15,76,74,.3); }
+.r2ac-fab:hover { background: #0d3f3d; }
+.r2ac-agent-panel { display: none; position: fixed; right: 20px; bottom: 76px; z-index: 40; width: min(360px, calc(100vw - 40px)); border: 1px solid #e8e2da; border-radius: 12px; padding: 16px; background: #fff; box-shadow: 0 12px 32px rgba(20,20,19,.18); }
+#r2ac-agent-toggle:checked ~ .r2ac-agent-panel { display: block; }

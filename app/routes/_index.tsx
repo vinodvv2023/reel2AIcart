@@ -1,6 +1,6 @@
 import type { LoaderFunctionArgs } from "@remix-run/node";
 import { json } from "@remix-run/node";
-import { useLoaderData } from "@remix-run/react";
+import { Form, useLoaderData } from "@remix-run/react";
 import { db } from "~/lib/db";
 
 // Embedded home: pipeline health at a glance. Reads Neon counts only.
@@ -111,6 +111,24 @@ export default function Home() {
           </ul>
         )}
       </section>
+      <input type="checkbox" id="r2ac-agent-toggle" style={{ display: "none" }} />
+      <label htmlFor="r2ac-agent-toggle" className="r2ac-fab">Search with your fav agent</label>
+      <div className="r2ac-agent-panel" role="dialog" aria-label="Use agent to search products">
+        <h3>Use agent to search products</h3>
+        <p><small>Vector search over your shoppable videos, answered with PDP links.</small></p>
+        <Form method="get" action="/agent" aria-label="Quick product search">
+          <input type="hidden" name="tab" value="search" />
+          <label htmlFor="fabq"><strong>Search</strong></label><br />
+          <input id="fabq" name="q" type="search" required placeholder="e.g. ballerina" />{" "}
+          <button type="submit" className="btn btn-primary">Go</button>
+        </Form>
+        <p style={{ marginBottom: 0 }}>
+          <small>
+            <a href="/agent">Open full chat</a> ·{" "}
+            <label htmlFor="r2ac-agent-toggle" style={{ cursor: "pointer", textDecoration: "underline" }}>Close</label>
+          </small>
+        </p>
+      </div>
     </main>
   );
 }
