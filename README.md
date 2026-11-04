@@ -254,6 +254,52 @@ Instagram tagging goes through Meta — set these up once per merchant:
 - `/mcp/{shop}` — MCP endpoint. Tools: `search_products(query, image_embedding?, price_max?)`, `get_product_details(sku)`, `get_inventory(sku)`, `get_video_summary(video_id)`. GET legacy params or POST MCP Streamable HTTP.
 - `/openapi.yaml` — agent entry contract.
 
+## Dashboard tour — what each button does
+
+Open `https://<your-app>/?shop=<your-shop>` (the `?shop=` comes automatically when you open the app from the store admin; without it the page shows "unknown shop" and falls back to the first installed tenant).
+
+### Home (`/`)
+
+- **Pipeline health card** — confirms which shop you're viewing. Opened directly (no `?shop=`)? It lists installed tenants as links (`/?shop=…`) so you can jump into the right one.
+- **Stats cards (read-only):** **Video cache** = enriched summaries served `<20ms` with no vision; **Video embeddings** = pgvector rows the MCP/agent search ranks over; **Enrichment worker** = `connected` when `MODAL_WEBHOOK_URL` is set, `not configured` otherwise (enrichment can't run until it is).
+- **Connect Instagram** → `/connect` (tag-a-reel workspace, below).
+- **Reconnect store** → `/auth/login?shop=…` — starts a *fresh* OAuth grant (unlike Test-app reinstalls, which reuse the old grant). Use when the readiness card says `token: dead` or scopes are missing.
+- **View storefront** → `https://<shop>` in a new tab (derived from the installed shop, so it always points at the right store). Below it: the test-storefront password hint.
+- **Catalog scan card** — backfills enrichment without manual re-saves; verified rows are never touched.
+  - **Scan existing catalog** (POST `/api/scan`) — queues one scan job (one Admin page of 250 products per cron tick, `~2 req/s` safe). While open, the button flips to a disabled **Scan in progress** state.
+  - **Watch progress** → `/scan?shop=…` (monitor page, below).
+  - Banners: `Scan complete — N checked, M analyzed(, K need review)`, or `Scan stopped: <error>`.
+- **Store readiness (webMCP) card** — one line per check: shop, `token ok/dead`, `scopes ok` or `missing: …`, `MCP ready/error` (`ready` = token + scopes + ≥1 embedding row), row count, check count, timestamp.
+  - **Re-check** (POST `/api/activate`, per shop) — re-runs the activation check now and returns a banner like `Re-check 14:22 UTC - token ok, scopes ok, MCP ready (38 rows)`. No navigation; result shows on the same card.
+  - Note line: webhooks are declared at deploy; **openapi.yaml** link = the agent entry contract.
+- **Recent webhook deliveries** — last 10 inbound events (`topic`, `forwarded/failed`, reason, time). Empty state tells you the smoke test: *"save a product to fire one."*
+- **Enrichment outcomes** — last 10 Vercel→Modal handoffs (`webhook:product_id` / `scan:product_id`, `enriched` / `sent - outcome pending` / `failed`, Modal's detail, time). `sent` that never flips = `MODAL_WEBHOOK_URL`/secret mismatch or product with no media.
+- **"Search with your fav agent" FAB** — floating button opening a panel: a **Search** box (GET `/agent?tab=search`, scoped to this shop) + **Go**, **Open full chat** → `/agent`, **Close**. Pure shortcut; same engine as `/agent`.
+
+### Tag-a-reel (`/connect`)
+
+Three steps, all selection state in the URL (`?reel=&product=&variant=`) so refresh/sharing never loses your picks.
+
+- **Back to dashboard** (top) → `/`.
+- **Intro card** — connection status (`Instagram is connected` vs `missing keys - set META_GRAPH_TOKEN + IG_USER_ID`), the Commerce-Account hint line, and the expected outcome (green confirmation + tags visible on the reel **in mobile** within minutes).
+- **1. Pick a reel** — **Search reels** form (filters by caption/id, 8 per page, **Prev/Next** pager), each row shows thumbnail (or inline video preview), caption, id, date, plus a badge if *this app* already tagged it here (`Tagged here on <date>` green / `Tag attempt failed` red — from `tag_events`, survives token expiry).
+- **2. Pick a product** — **Search products** form (by title), same paging; multi-variant products open a **variant dialog** listing each variant + price + id (the id is sent as the Meta catalog product ID — see §2). **Done** closes the dialog.
+- **3. Review and tag** — mirror table of your three picks + **Clear** (resets the URL state). **Tag products on reel** (POST) is disabled until reel + product + variant are all chosen; on success/failure a banner shows the outcome (`Tagged reel <id> - check the reel on mobile…` vs the exact Graph error, logged to `tag_events` either way).
+
+### Assistant (`/agent`)
+
+- **Back to dashboard** — preserves `?shop=` when known.
+- **Ask / Search pills** — switch `?tab=` (highlighted pill = active).
+- **Search tab** — product search box + **Search** (GET; up to 8 cards). Each card: hero image (or letter placeholder), summary excerpt, vector `score`, **View product** link (PDP + `utm_source=agent-chat`). `No matches.` when empty.
+- **Ask tab** — multi-turn chat (history rides in a hidden form field, last 7 turns kept). **Agent** dropdown: `Muse Spark` (default, `MODEL_API_KEY`, model `muse-spark-1.3-contributor`) or `Grok` (`XAI_API_KEY` + `GROK_MODEL` — missing model gives a "Set GROK_MODEL…" error). Question box (300 chars) + **Ask**. The model may call `search_products`/`get_video_summary` (max 3 tool rounds); the reply footer shows `Answered by … · tools: …`. System prompt forces product names + PDP links and forbids inventing products/prices. Empty question → `Type a question first.`
+
+### Scan monitor (`/scan?shop=…`)
+
+- **Status card** — `No scans yet.` / live progress (`checked N items…, M sent for analysis`) / **done breakdown** (checked N · already-done skipped · M sent, finishes on its own in minutes · K need review) / **failed + "Try again from the dashboard."** Auto-refreshes every 30s (meta refresh, no JS) *only* while a job is open.
+- **Back to dashboard** (preserves shop).
+- **Vision quality line** — `N analyzed in detail` (Muse vision rows) vs `M basic info only` (heuristic/hash rows). Tells you at a glance how much of the catalog got real AI analysis.
+- **Verified rows (frozen)** — up to 50 rows (hash prefix, video URL, vision provider) each with a **Release** button (POST `/api/release`), plus **Release all**. Releasing *unfreezes* a row (`verified=false`) so the next scan/re-save may re-enrich it — freezing is the default, every release is an explicit click. Redirects back here (`?from=scan`) or home.
+
 ## Troubleshooting
 
 | Symptom | Cause → Fix |
