@@ -39,12 +39,15 @@ export async function action({ request }: ActionFunctionArgs) {
     // video_url needs product-media GraphQL + stored shop token (TODO) —
     // until then Modal skips media-less payloads instead of writing junk rows.
     let payload: Record<string, unknown> = {};
+    let title = "";
     try {
       const p = JSON.parse(raw) as {
         id?: number;
+        title?: string;
         image?: { src?: string };
         images?: { src?: string }[];
       };
+      title = (p.title ?? "").slice(0, 60);
       const hero = [...(p.images ?? []).map((i) => i.src).filter(Boolean)];
       if (p.image?.src && !hero.includes(p.image.src)) hero.unshift(p.image.src);
       payload = {
@@ -88,10 +91,10 @@ export async function action({ request }: ActionFunctionArgs) {
       await record({
         shop, topic, product_id: productId,
         status: res.ok ? "forwarded" : "failed",
-        detail: `modal ${res.status} hero=${(payload.hero_images as unknown[]).length}`,
+        detail: `modal ${res.status} hero=${(payload.hero_images as unknown[]).length}${title ? ` ${title}` : ""}`,
       });
     } catch (e) {
-      await record({ shop, topic, product_id: productId, status: "failed", detail: `modal fetch: ${String(e)}` });
+      await record({ shop, topic, product_id: productId, status: "failed", detail: `modal fetch: ${String(e)}${title ? ` ${title}` : ""}` });
     }
   }
   return json({ ok: true, topic, enqueued: true });

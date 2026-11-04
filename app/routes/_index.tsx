@@ -154,7 +154,7 @@ export default function Home() {
                 </small>{" "}
                 <Form method="post" action="/api/activate" style={{ display: "inline" }}>
                   <input type="hidden" name="shop" value={c.shop} />
-                  <button type="submit">Re-check</button>
+                  <button type="submit" className="btn btn-ghost">Re-check</button>
                 </Form>
               </li>
             ))}
