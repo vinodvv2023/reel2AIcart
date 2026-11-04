@@ -115,33 +115,6 @@ export default function Connect() {
   const keep = { q, rq, product: productId };
   return (
     <main className="r2ac-wrap">
-      <style>{`
-        .r2ac-wrap{max-width:1120px;margin:0 auto;padding:24px;font-family:system-ui,sans-serif;background:#fcfcf9;color:#141413}
-        .r2ac-brand{display:flex;align-items:center;gap:10px}
-        .r2ac-mark{width:34px;height:34px;border-radius:10px;background:#0f4c4a;position:relative;flex:none}
-        .r2ac-mark::after{content:"";position:absolute;left:12px;top:9px;border-left:12px solid #ff7a5c;border-top:8px solid transparent;border-bottom:8px solid transparent}
-        .r2ac-cols{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:16px}
-        @media (max-width:900px){.r2ac-cols{grid-template-columns:1fr}}
-        .r2ac-card{border:1px solid #e8e2da;border-radius:12px;padding:16px;background:#fff}
-        .r2ac-card h2{margin:0 0 4px;color:#0f4c4a}
-        .r2ac-row{display:flex;gap:10px;align-items:center;border-radius:10px;padding:8px;margin-top:8px}
-        .r2ac-a{background:#fdf3ec}.r2ac-b{background:#eef6f5}
-        .r2ac-row img{width:64px;height:64px;object-fit:cover;border-radius:8px;flex:none}
-        .r2ac-ph{width:64px;height:64px;border-radius:8px;flex:none;background:#f3ddd2;color:#0f4c4a;font-weight:700;font-size:24px;display:flex;align-items:center;justify-content:center}
-        .btn{display:inline-block;border-radius:999px;padding:10px 18px;font-weight:600;font-size:15px;cursor:pointer;text-decoration:none;border:1px solid transparent;transition:background-color 200ms,color 200ms}
-        .btn-primary{background:#0f4c4a;color:#fff}.btn-primary:hover{background:#0d3f3d}.btn-primary:active{transform:scale(.98)}
-        .btn-ghost{background:#fff;border-color:#0f4c4a;color:#0f4c4a}.btn-ghost:hover{background:#eef6f5}.btn-ghost:active{transform:scale(.98)}
-        .btn[disabled]{opacity:.55;cursor:default}
-        input[type=text],input[type=search]{padding:9px 12px;font-size:16px;border-radius:8px;border:1px solid #e8e2da;color:#141413;background:#fff}
-        label{font-weight:600}
-        :focus-visible{outline:2px solid #ff7a5c;outline-offset:2px}
-        .r2ac-pager{display:flex;gap:10px;align-items:center;margin-top:12px}
-        .r2ac-ok{color:#0f4c4a}.r2ac-err{color:#b3402a}
-        .r2ac-modal{display:none}
-        .r2ac-modal:target{display:flex;position:fixed;inset:0;background:rgba(20,20,19,.45);z-index:50;padding:24px}
-        .r2ac-modal .r2ac-box{background:#fff;border-radius:12px;padding:20px;max-width:480px;width:100%;margin:auto}
-        .r2ac-box h3{margin:0 0 8px;color:#0f4c4a}
-      `}</style>
 
       <header className="r2ac-brand" aria-label="Reel2AICart">
         <span className="r2ac-mark" aria-hidden="true" />

@@ -4,6 +4,7 @@ import { useLoaderData } from "@remix-run/react";
 import { db } from "~/lib/db";
 
 // Embedded home: pipeline health at a glance. Reads Neon counts only.
+// Styled by the shared r2ac classes in app/tokens.css (same as /connect).
 export async function loader({ request }: LoaderFunctionArgs) {
   const url = new URL(request.url);
   const shop = url.searchParams.get("shop") ?? "unknown shop";
@@ -30,78 +31,76 @@ export async function loader({ request }: LoaderFunctionArgs) {
   return json({ shop, counts, modal: process.env.MODAL_WEBHOOK_URL ?? null, events, installed });
 }
 
-const card: React.CSSProperties = {
-  border: "1px solid #e5e0d8",
-  borderRadius: 12,
-  padding: 16,
-  background: "#fff",
-};
-
 export default function Home() {
   const { shop, counts, modal, events, installed } = useLoaderData<typeof loader>();
   const ok = (n: number) => (n >= 0 ? String(n) : "unavailable");
   const known = shop !== "unknown shop";
   return (
-    <main style={{ padding: 24, fontFamily: "system-ui", background: "#faf8f4", minHeight: "100vh" }}>
-      <h1 style={{ color: "#0F4C4A" }}>Reel2AICart</h1>
-      <p>
-        Installed on <strong>{shop}</strong>
-        {!known && (
-          <small>
-            {" "}(opened directly - Shopify passes ?shop= inside admin; tenant below is from the installs table)
-          </small>
-        )}
-      </p>
-      {!known && installed.length > 0 && (
+    <main className="r2ac-wrap">
+      <header className="r2ac-brand" aria-label="Reel2AICart">
+        <span className="r2ac-mark" aria-hidden="true" />
+        <strong style={{ fontSize: 22, color: "#0f4c4a" }}>
+          Reel2<span style={{ color: "#ff7a5c" }}>AI</span>Cart
+        </strong>
+      </header>
+      <section className="r2ac-card" style={{ marginTop: 16 }}>
+        <h2>Pipeline health</h2>
         <p>
-          <small>
-            Installed tenants:{" "}
-            {installed.map((s) => (
-              <span key={s.shop}>
-                <a href={`/?shop=${encodeURIComponent(s.shop)}`}>{s.shop}</a> ({s.scopes || "no scopes recorded"}){" "}
-              </span>
-            ))}
-          </small>
+          Installed on <strong>{shop}</strong>
+          {!known && (
+            <small> (opened directly - Shopify passes ?shop= inside admin; tenants below come from the installs table)</small>
+          )}
         </p>
-      )}
-      <section style={{ display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", marginTop: 16 }}>
-        <div style={card}>
+        {!known && installed.length > 0 && (
+          <p>
+            <small>
+              Installed tenants:{" "}
+              {installed.map((s) => (
+                <span key={s.shop}>
+                  <a href={`/?shop=${encodeURIComponent(s.shop)}`}>{s.shop}</a> ({s.scopes || "no scopes recorded"}){" "}
+                </span>
+              ))}
+            </small>
+          </p>
+        )}
+      </section>
+      <section className="r2ac-stats">
+        <div className="r2ac-card">
           <h3>Video cache</h3>
-          <p style={{ fontSize: 28, margin: 0 }}>{ok(counts.videos)}</p>
+          <p className="r2ac-num">{ok(counts.videos)}</p>
           <small>summaries served &lt;20ms, no vision</small>
         </div>
-        <div style={card}>
+        <div className="r2ac-card">
           <h3>Video embeddings</h3>
-          <p style={{ fontSize: 28, margin: 0 }}>{ok(counts.products)}</p>
+          <p className="r2ac-num">{ok(counts.products)}</p>
           <small>pgvector rows for MCP search</small>
         </div>
-        <div style={card}>
+        <div className="r2ac-card">
           <h3>Enrichment worker</h3>
-          <p style={{ margin: 0, color: modal ? "#0F4C4A" : "#FF7A5C" }}>
+          <p className={modal ? "r2ac-ok" : "r2ac-err"} style={{ margin: 0 }}>
             {modal ? "connected" : "not configured"}
           </p>
           <small>Modal ingest endpoint</small>
         </div>
       </section>
       <p style={{ marginTop: 16 }}>
-        <a href="/connect" style={{ color: "#FF7A5C" }}>Connect Instagram →</a>
-        {" · "}
-        {shop !== "unknown shop" ? (
-          <a href={`/auth/login?shop=${encodeURIComponent(shop)}`} target="_top">Reconnect store →</a>
+        <a className="btn btn-ghost" href="/connect">Connect Instagram</a>{" "}
+        {known ? (
+          <a className="btn btn-ghost" href={`/auth/login?shop=${encodeURIComponent(shop)}`} target="_top">Reconnect store</a>
         ) : (
           <small>Open this page from Apps in your store admin to enable reconnect.</small>
         )}
       </p>
-      <section style={{ ...card, marginTop: 12 }}>
+      <section className="r2ac-card" style={{ marginTop: 12 }}>
         <h3>Recent webhook deliveries</h3>
         {events.length === 0 ? (
-          <small>No deliveries recorded yet — save a product to fire one.</small>
+          <small>No deliveries recorded yet - save a product to fire one.</small>
         ) : (
           <ul style={{ margin: 0, paddingLeft: 18 }}>
             {events.map((ev, i) => (
               <li key={i}>
-                <code>{ev.topic}</code> —{" "}
-                <strong style={{ color: ev.status === "forwarded" ? "#0F4C4A" : "#FF7A5C" }}>
+                <code>{ev.topic}</code> -{" "}
+                <strong className={ev.status === "forwarded" ? "r2ac-ok" : "r2ac-err"}>
                   {ev.status}
                 </strong>{" "}
                 <small>
