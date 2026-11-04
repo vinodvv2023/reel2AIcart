@@ -3,6 +3,7 @@ import type { LoaderFunctionArgs } from "@remix-run/node";
 import { json } from "@remix-run/node";
 import { useLoaderData } from "@remix-run/react";
 import { db } from "~/lib/db";
+import { activateShop } from "~/lib/shopify/activate";
 
 // OAuth callback: verifies HMAC, exchanges code, upserts the shop token.
 function validHmac(params: URLSearchParams, secret: string): boolean {
@@ -43,6 +44,11 @@ export async function loader({ request }: LoaderFunctionArgs) {
   await sql`INSERT INTO shops (shop, access_token, scopes)
     VALUES (${shop}, ${access_token}, ${scope ?? ""})
     ON CONFLICT (shop) DO UPDATE SET access_token = EXCLUDED.access_token, scopes = EXCLUDED.scopes, installed_at = NOW()`;
+  try {
+    await activateShop(shop);
+  } catch (e) {
+    console.error("[activate] post-install check failed:", String(e));
+  }
   return json({ ok: true, shop, scope: scope ?? "" });
 }
 
