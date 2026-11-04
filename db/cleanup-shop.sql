@@ -1,56 +1,64 @@
--- Full per-shop cleanup (full catalog replacement).
--- Run in the Neon SQL editor. video_embeddings / video_cache have NO shop
--- column, so item rows are matched via pdp_url (enrichment always writes
--- pdp_url = https://{shop}/products/...). The shops row (OAuth token) is
--- KEPT so the store does NOT need reinstalling — delete it only if you also
--- want to force a fresh OAuth install.
+-- Fresh-start reset for a full catalog replacement.
+-- Neon-SQL-editor safe: plain SQL only, NO psql backslash commands (\set etc.)
+-- — the editor rejects those, which is why the previous version deleted nothing.
 --
--- 1. Set the shop below. 2. Run the PREVIEW block, check counts.
--- 3. Only then run the DELETE transaction.
+-- Option A (you are here: starting fresh) wipes ALL item + history data.
+-- Option B (further down) targets ONE shop only — use it when other
+-- tenants' data must survive.
+--
+-- The shops row (OAuth token) is KEPT in both options so the store does NOT
+-- need reinstalling. Delete it only to force a fresh OAuth install.
 
-\set shop 'reel2aicart-test.myshopify.com'
-
--- ============ PREVIEW (read-only) ============
-SELECT 'video_embeddings' AS tbl, COUNT(*) AS n FROM video_embeddings
-  WHERE pdp_url LIKE 'https://' || :'shop' || '/%';
-SELECT 'video_cache' AS tbl, COUNT(*) AS n FROM video_cache WHERE video_id IN
-  (SELECT video_hash FROM video_embeddings WHERE pdp_url LIKE 'https://' || :'shop' || '/%');
-SELECT 'ingest_jobs' AS tbl, COUNT(*) AS n FROM ingest_jobs WHERE shop = :'shop';
-SELECT 'tag_events' AS tbl, COUNT(*) AS n FROM tag_events WHERE shop = :'shop';
-SELECT 'scan_jobs' AS tbl, COUNT(*) AS n FROM scan_jobs WHERE shop = :'shop';
-SELECT 'webhook_events' AS tbl, COUNT(*) AS n FROM webhook_events WHERE shop = :'shop';
-SELECT 'shop_status_checks' AS tbl, COUNT(*) AS n FROM shop_status_checks WHERE shop = :'shop';
-SELECT 'order_attribution' AS tbl, COUNT(*) AS n FROM order_attribution WHERE shop = :'shop';
--- Orphan rows with no shop in pdp_url (bulk/legacy imports) are NOT touched above.
--- Inspect them before deciding:
-SELECT COUNT(*) AS orphan_embeddings FROM video_embeddings
-  WHERE pdp_url IS NULL OR pdp_url = '' OR pdp_url NOT LIKE 'https://%';
-
--- ============ DELETE (transactional) ============
+-- ============ Option A: FULL RESET (run this) ============
 BEGIN;
 
--- Cache first (video_id = video_hash of the rows below).
-DELETE FROM video_cache WHERE video_id IN
-  (SELECT video_hash FROM video_embeddings WHERE pdp_url LIKE 'https://' || :'shop' || '/%');
+TRUNCATE video_cache;
+TRUNCATE video_embeddings;
+TRUNCATE ingest_jobs RESTART IDENTITY;
+TRUNCATE tag_events RESTART IDENTITY;
+TRUNCATE scan_jobs RESTART IDENTITY;
+TRUNCATE webhook_events RESTART IDENTITY;
+TRUNCATE shop_status_checks RESTART IDENTITY;
+TRUNCATE order_attribution RESTART IDENTITY;
+-- shops intentionally NOT truncated (keeps OAuth token).
 
--- Item data (verified rows included — the whole catalog is being replaced).
-DELETE FROM video_embeddings WHERE pdp_url LIKE 'https://' || :'shop' || '/%';
-
--- Per-shop operational history.
-DELETE FROM ingest_jobs WHERE shop = :'shop';
-DELETE FROM tag_events WHERE shop = :'shop';
-DELETE FROM scan_jobs WHERE shop = :'shop';
-DELETE FROM webhook_events WHERE shop = :'shop';
-DELETE FROM shop_status_checks WHERE shop = :'shop';
-DELETE FROM order_attribution WHERE shop = :'shop';
-
--- KEEP shops row (OAuth token) — comment out the next line only to force reinstall:
--- DELETE FROM shops WHERE shop = :'shop';
-
--- ============ VERIFY (expect 0s for this shop) ============
+-- Verify (expect 0 on every row; shops = 1 per installed store).
 SELECT 'video_embeddings' AS tbl, COUNT(*) AS n FROM video_embeddings
-  WHERE pdp_url LIKE 'https://' || :'shop' || '/%';
-SELECT 'ingest_jobs' AS tbl, COUNT(*) AS n FROM ingest_jobs WHERE shop = :'shop';
-SELECT 'tag_events' AS tbl, COUNT(*) AS n FROM tag_events WHERE shop = :'shop';
+UNION ALL SELECT 'video_cache', COUNT(*) FROM video_cache
+UNION ALL SELECT 'ingest_jobs', COUNT(*) FROM ingest_jobs
+UNION ALL SELECT 'tag_events', COUNT(*) FROM tag_events
+UNION ALL SELECT 'scan_jobs', COUNT(*) FROM scan_jobs
+UNION ALL SELECT 'webhook_events', COUNT(*) FROM webhook_events
+UNION ALL SELECT 'shop_status_checks', COUNT(*) FROM shop_status_checks
+UNION ALL SELECT 'order_attribution', COUNT(*) FROM order_attribution
+UNION ALL SELECT 'shops (kept)', COUNT(*) FROM shops;
 
 COMMIT;
+
+-- ============ Option B: ONE SHOP ONLY (skip if you ran A) ============
+-- Replace SHOP_DOMAIN below with the store (e.g. reel2aicart-test.myshopify.com),
+-- run the PREVIEW first, then the DELETE block.
+--
+-- -- Preview:
+-- SELECT 'video_embeddings', COUNT(*) FROM video_embeddings WHERE pdp_url LIKE '%SHOP_DOMAIN%';
+-- SELECT 'video_cache', COUNT(*) FROM video_cache WHERE video_id IN
+--   (SELECT video_hash FROM video_embeddings WHERE pdp_url LIKE '%SHOP_DOMAIN%');
+-- SELECT 'ingest_jobs', COUNT(*) FROM ingest_jobs WHERE shop = 'SHOP_DOMAIN';
+-- SELECT 'tag_events', COUNT(*) FROM tag_events WHERE shop = 'SHOP_DOMAIN';
+-- SELECT 'scan_jobs', COUNT(*) FROM scan_jobs WHERE shop = 'SHOP_DOMAIN';
+-- SELECT 'webhook_events', COUNT(*) FROM webhook_events WHERE shop = 'SHOP_DOMAIN';
+-- SELECT 'shop_status_checks', COUNT(*) FROM shop_status_checks WHERE shop = 'SHOP_DOMAIN';
+-- SELECT 'order_attribution', COUNT(*) FROM order_attribution WHERE shop = 'SHOP_DOMAIN';
+--
+-- -- Delete (transactional):
+-- BEGIN;
+-- DELETE FROM video_cache WHERE video_id IN
+--   (SELECT video_hash FROM video_embeddings WHERE pdp_url LIKE '%SHOP_DOMAIN%');
+-- DELETE FROM video_embeddings WHERE pdp_url LIKE '%SHOP_DOMAIN%';
+-- DELETE FROM ingest_jobs WHERE shop = 'SHOP_DOMAIN';
+-- DELETE FROM tag_events WHERE shop = 'SHOP_DOMAIN';
+-- DELETE FROM scan_jobs WHERE shop = 'SHOP_DOMAIN';
+-- DELETE FROM webhook_events WHERE shop = 'SHOP_DOMAIN';
+-- DELETE FROM shop_status_checks WHERE shop = 'SHOP_DOMAIN';
+-- DELETE FROM order_attribution WHERE shop = 'SHOP_DOMAIN';
+-- COMMIT;
