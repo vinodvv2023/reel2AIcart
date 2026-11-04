@@ -108,20 +108,29 @@ modal deploy modal/enrich_video.py
 # copy the ingest endpoint URL → MODAL_WEBHOOK_URL in Vercel + .env
 ```
 
-### 5. Shopify app
+### 5. Shopify app (via [dev.shopify.com](https://dev.shopify.com))
+
+All app identity, stores, and installs live in the Shopify dev dashboard — do this once before/instead of the CLI:
+
+1. **Log in** at [dev.shopify.com](https://dev.shopify.com) (free developer/Partner account; create an organization on first visit).
+2. **Create the dev store:** Stores → Add store → development store (e.g. `reel2aicart-test.myshopify.com`). Free forever for testing. Its storefront is password-gated — the password is set in the store admin under Preferences (ours: `ChangeMe!`).
+3. **Open the app:** Apps → **Reel2AICart**. (Forking with your own credentials? Create app instead, then copy its Client ID into `client_id` in `shopify.app.toml` and into `SHOPIFY_API_KEY` in `.env`.)
+4. **Configuration** (must mirror `shopify.app.toml` — `shopify app deploy` pushes the toml so both stay in sync):
+   - App URL: `https://reel2-aicart.vercel.app`
+   - Allowed redirection URLs: `https://reel2-aicart.vercel.app/auth/callback`, `https://reel2-aicart.vercel.app/auth/shopify/callback`
+   - Access scopes: `read_products, read_inventory, read_content, write_content, read_orders`
+   - Webhook subscriptions (API 2026-10): `products/create`, `products/update`, `inventory_levels/update` → `https://reel2-aicart.vercel.app/webhooks/shopify`
+5. **Client credentials:** App → Settings → copy Client ID / Client secret → `SHOPIFY_API_KEY` / `SHOPIFY_API_SECRET` in `.env` and Vercel env.
+6. **Install on the dev store:** App → Test your app (install) → select the dev store → approve the scopes. The OAuth callback writes the shop token to the `shops` table; webhooks register at deploy. Distribution stays **Test/private** until App Store submission (see banner at top).
+
+CLI (keeps toml ↔ dashboard in sync after dashboard edits):
 
 ```bash
 shopify app dev        # local dev: OAuth + webhooks tunnel
-shopify app deploy     # registers shopify.app.toml (scopes, webhooks, theme extension)
+shopify app deploy     # pushes shopify.app.toml (scopes, webhooks, theme extension)
 ```
 
-`shopify.app.toml` already declares:
-- **Scopes (minimal):** `read_products, read_inventory, read_content, write_content, read_orders`
-- **Webhooks (API 2026-10):** `products/create`, `products/update`, `inventory_levels/update` → `https://reel2-aicart.vercel.app/webhooks/shopify`
-- **Extension:** `extensions/shoppable-video-widget` (theme app extension — shoppable video widget)
-- **Redirects:** `/auth/callback`, `/auth/shopify/callback`
-
-Then install the app on your store (Partners dashboard → Test store, or App Store listing). OAuth writes the shop token to the `shops` table; webhooks register at deploy.
+`shopify.app.toml` already declares the scopes, webhooks, theme app extension (`extensions/shoppable-video-widget`), and redirect URLs listed above.
 
 ### 6. Deploy web (Vercel)
 
