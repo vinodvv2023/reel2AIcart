@@ -4,6 +4,7 @@ import { Form, useLoaderData } from "@remix-run/react";
 import { db } from "~/lib/db";
 
 type ScanJob = { id: number; shop: string; status: string; scanned: number; enqueued: number; skipped_verified: number; error: string };
+type Ready = { shop: string; token_ok: boolean; missing_scopes: string; mcp: string; rows: number; checked_at: string; checks: number };
 
 // Embedded home: pipeline health at a glance. Reads Neon counts only.
 // Styled by the shared r2ac classes in app/tokens.css (same as /connect).
@@ -13,16 +14,21 @@ export async function loader({ request }: LoaderFunctionArgs) {
   let counts = { videos: -1, products: -1 };
   let events: { topic: string; status: string; detail: string; created_at: string }[] = [];
   let installed: { shop: string; scopes: string }[] = [];
-  let job: ScanJob | null = null;  let frozen: { video_hash: string; url: string; vision: string }[] = [];
+  let job: ScanJob | null = null;
+  let frozen: { video_hash: string; url: string; vision: string }[] = [];
+  let readiness: Ready[] = [];
   try {
     const sql = db();
-    const [v, p, e, s, j, f] = await Promise.all([
+    const [v, p, e, s, j, f, r] = await Promise.all([
       sql`SELECT COUNT(*)::int AS n FROM video_cache`,
       sql`SELECT COUNT(*)::int AS n FROM video_embeddings`,
       sql`SELECT topic, status, detail, created_at::text AS created_at FROM webhook_events ORDER BY id DESC LIMIT 10`,
       sql`SELECT shop, scopes FROM shops ORDER BY installed_at DESC`,
       sql`SELECT id, shop, status, scanned, enqueued, skipped_verified, error FROM scan_jobs ORDER BY id DESC LIMIT 1`,
       sql`SELECT video_hash, summary->>'video_url' AS url, summary->'providers'->>'vision' AS vision FROM video_embeddings WHERE verified ORDER BY video_hash LIMIT 50`,
+      sql`SELECT DISTINCT ON (c.shop) c.shop, c.token_ok, c.missing_scopes, c.mcp, c.rows,
+        c.checked_at::text AS checked_at, (SELECT COUNT(*)::int FROM shop_status_checks h WHERE h.shop = c.shop) AS checks
+        FROM shop_status_checks c ORDER BY c.shop, c.checked_at DESC`,
     ]);
     counts = {
       videos: (v as { n: number }[])[0]?.n ?? -1,
@@ -32,14 +38,15 @@ export async function loader({ request }: LoaderFunctionArgs) {
     installed = s as typeof installed;
     job = ((j as ScanJob[])[0] ?? null);
     frozen = f as typeof frozen;
+    readiness = r as typeof readiness;
   } catch {
     // DB unreachable — page still renders, counts show as unavailable.
   }
-  return json({ shop, counts, modal: process.env.MODAL_WEBHOOK_URL ?? null, events, installed, job, frozen });
+  return json({ shop, counts, modal: process.env.MODAL_WEBHOOK_URL ?? null, events, installed, job, frozen, readiness });
 }
 
 export default function Home() {
-  const { shop, counts, modal, events, installed, job, frozen } = useLoaderData<typeof loader>();
+  const { shop, counts, modal, events, installed, job, frozen, readiness } = useLoaderData<typeof loader>();
   const ok = (n: number) => (n >= 0 ? String(n) : "unavailable");
   const known = shop !== "unknown shop";
   const scanShop = known ? shop : installed[0]?.shop ?? "";
@@ -141,6 +148,31 @@ export default function Home() {
           </Form>
         </section>
       )}
+      <section className="r2ac-card" style={{ marginTop: 12 }}>
+        <h3>Store readiness (webMCP)</h3>
+        {readiness.length === 0 ? (
+          <p><small>No checks yet - install or re-authorize a store, or Re-check below.</small></p>
+        ) : (
+          <ul style={{ margin: 0, paddingLeft: 18 }}>
+            {readiness.map((c) => (
+              <li key={c.shop}>
+                <small>
+                  <strong>{c.shop}</strong> - token{" "}
+                  <strong className={c.token_ok ? "r2ac-ok" : "r2ac-err"}>{c.token_ok ? "ok" : "dead"}</strong>
+                  {c.missing_scopes ? ` - missing: ${c.missing_scopes}` : " - scopes ok"} - MCP{" "}
+                  <strong className={c.mcp === "ready" ? "r2ac-ok" : "r2ac-err"}>{c.mcp}</strong>
+                  {" "}({c.rows} rows, {c.checks} checks, {c.checked_at})
+                </small>{" "}
+                <Form method="post" action="/api/activate" style={{ display: "inline" }}>
+                  <input type="hidden" name="shop" value={c.shop} />
+                  <button type="submit">Re-check</button>
+                </Form>
+              </li>
+            ))}
+          </ul>
+        )}
+        <p><small>Webhooks: declared at deploy (products/create, products/update, inventory_levels/update). Agent entry: <a href="/openapi.yaml">openapi.yaml</a>.</small></p>
+      </section>
       <section className="r2ac-card" style={{ marginTop: 12 }}>
         <h3>Recent webhook deliveries</h3>
         {events.length === 0 ? (
