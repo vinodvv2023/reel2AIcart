@@ -271,7 +271,7 @@ export default function Connect() {
               {products.map((p, i) => {
                 const on = String(p.id) === productId;
                 return (
-                  <a key={p.id} href={qs({ ...keep, product: String(p.id), variant: "", pg: "1" }) + "#pick"}
+                  <a key={p.id} href={qs({ ...keep, product: String(p.id), variant: "", pg: "1" }) + (p.variants.length > 1 ? "#pick" : "")}
                     aria-current={on || undefined}
                     className={`r2ac-row ${i % 2 ? "r2ac-b" : "r2ac-a"}`}
                     style={{ textDecoration: "none", color: "inherit", border: on ? "2px solid #0f4c4a" : "2px solid transparent" }}>
@@ -294,14 +294,11 @@ export default function Connect() {
                 <small>Page {page} of {pages} ({total} products)</small>
                 <a className="btn btn-ghost" aria-disabled={page >= pages} href={page >= pages ? "#" : qs({ ...keep, pg: String(page + 1) })}>Next</a>
               </div>
-              {selProduct && (
+              {selProduct && selProduct.variants.length > 1 && (
                 <div id="pick" className="r2ac-modal" role="dialog" aria-label={`Variants of ${selProduct.title}`}>
                   <div className="r2ac-box">
                     <h3>Variant of {selProduct.title}</h3>
                     <p><small>Sent as the Meta catalog product ID, synced from Shopify by the Facebook and Instagram sales channel.</small></p>
-                    {selProduct.variants.length === 1 ? (
-                      <p>Only variant: <strong>{selProduct.variants[0].title}</strong> - ${selProduct.variants[0].price} (auto-selected below)</p>
-                    ) : (
                       <div role="list" aria-label="Variants">
                         {selProduct.variants.map((v) => (
                           <p key={v.id}>
@@ -312,7 +309,6 @@ export default function Connect() {
                           </p>
                         ))}
                       </div>
-                    )}
                     <p style={{ marginTop: 12 }}>
                       <a className="btn btn-primary" href="#">Done</a>
                     </p>
