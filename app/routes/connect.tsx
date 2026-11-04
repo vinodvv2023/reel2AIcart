@@ -327,23 +327,26 @@ export default function Connect() {
             <tr>
               <th scope="row" style={{ textAlign: "left", padding: "6px 12px 6px 0", verticalAlign: "top" }}>Reel</th>
               <td style={{ padding: "6px 0" }}>
-                {selReel ? (<><strong>{selReel.caption?.slice(0, 80) || "(no caption)"}</strong><br /><small>{selReel.id} · {selReel.timestamp?.slice(0, 10)}</small></>) : (<small>Not picked yet - choose left.</small>)}
+                {selReel ? (<><strong>{selReel.caption?.slice(0, 80) || "(no caption)"}</strong><br /><small>{selReel.id} · {selReel.timestamp?.slice(0, 10)}</small> <a href={qs({ q, rq, product: productId, variant: variantId, pg: String(page), rpg: String(rPage) })}>Clear</a></>) : (<small>Not picked yet - choose left.</small>)}
               </td>
             </tr>
             <tr>
               <th scope="row" style={{ textAlign: "left", padding: "6px 12px 6px 0", verticalAlign: "top" }}>Product</th>
               <td style={{ padding: "6px 0" }}>
-                {selProduct ? (<strong>{selProduct.title}</strong>) : (<small>Not picked yet - choose right.</small>)}
+                {selProduct ? (<><strong>{selProduct.title}</strong> <a href={qs({ q, rq, reel: reelId, pg: String(page), rpg: String(rPage) })}>Clear</a></>) : (<small>Not picked yet - choose right.</small>)}
               </td>
             </tr>
             <tr>
               <th scope="row" style={{ textAlign: "left", padding: "6px 12px 6px 0", verticalAlign: "top" }}>Variant</th>
               <td style={{ padding: "6px 0" }}>
-                {selVariant ? (<><strong>{selVariant.title}</strong> - ${selVariant.price} <small>({selVariant.id})</small></>) : (<small>Not picked yet.</small>)}
+                {selVariant ? (<><strong>{selVariant.title}</strong> - ${selVariant.price} <small>({selVariant.id})</small> <a href={qs({ q, rq, product: productId, reel: reelId, pg: String(page), rpg: String(rPage) })}>Clear</a></>) : (<small>Not picked yet.</small>)}
               </td>
             </tr>
           </tbody>
         </table>
+        <p>
+          <small><a href={qs({ q, rq, pg: String(page), rpg: String(rPage) })}>Start over (clear all three)</a></small>
+        </p>
         {complete ? (
           <Form method="post" aria-label="Tag products on the selected reel" style={{ marginTop: 12 }}>
             <input type="hidden" name="mediaId" value={reelId} />
