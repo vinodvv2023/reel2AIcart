@@ -3,6 +3,8 @@ import { json } from "@remix-run/node";
 import { Form, useLoaderData } from "@remix-run/react";
 import { db } from "~/lib/db";
 
+type ScanJob = { id: number; shop: string; status: string; scanned: number; enqueued: number; skipped_verified: number; error: string };
+
 // Embedded home: pipeline health at a glance. Reads Neon counts only.
 // Styled by the shared r2ac classes in app/tokens.css (same as /connect).
 export async function loader({ request }: LoaderFunctionArgs) {
@@ -11,13 +13,16 @@ export async function loader({ request }: LoaderFunctionArgs) {
   let counts = { videos: -1, products: -1 };
   let events: { topic: string; status: string; detail: string; created_at: string }[] = [];
   let installed: { shop: string; scopes: string }[] = [];
+  let job: ScanJob | null = null;  let frozen: { video_hash: string; url: string; vision: string }[] = [];
   try {
     const sql = db();
-    const [v, p, e, s] = await Promise.all([
+    const [v, p, e, s, j, f] = await Promise.all([
       sql`SELECT COUNT(*)::int AS n FROM video_cache`,
       sql`SELECT COUNT(*)::int AS n FROM video_embeddings`,
       sql`SELECT topic, status, detail, created_at::text AS created_at FROM webhook_events ORDER BY id DESC LIMIT 10`,
       sql`SELECT shop, scopes FROM shops ORDER BY installed_at DESC`,
+      sql`SELECT id, shop, status, scanned, enqueued, skipped_verified, error FROM scan_jobs ORDER BY id DESC LIMIT 1`,
+      sql`SELECT video_hash, summary->>'video_url' AS url, summary->'providers'->>'vision' AS vision FROM video_embeddings WHERE verified ORDER BY video_hash LIMIT 50`,
     ]);
     counts = {
       videos: (v as { n: number }[])[0]?.n ?? -1,
@@ -25,16 +30,19 @@ export async function loader({ request }: LoaderFunctionArgs) {
     };
     events = e as typeof events;
     installed = s as typeof installed;
+    job = ((j as ScanJob[])[0] ?? null);
+    frozen = f as typeof frozen;
   } catch {
     // DB unreachable — page still renders, counts show as unavailable.
   }
-  return json({ shop, counts, modal: process.env.MODAL_WEBHOOK_URL ?? null, events, installed });
+  return json({ shop, counts, modal: process.env.MODAL_WEBHOOK_URL ?? null, events, installed, job, frozen });
 }
 
 export default function Home() {
-  const { shop, counts, modal, events, installed } = useLoaderData<typeof loader>();
+  const { shop, counts, modal, events, installed, job, frozen } = useLoaderData<typeof loader>();
   const ok = (n: number) => (n >= 0 ? String(n) : "unavailable");
   const known = shop !== "unknown shop";
+  const scanShop = known ? shop : installed[0]?.shop ?? "";
   return (
     <main className="r2ac-wrap">
       <header className="r2ac-brand" aria-label="Reel2AICart">
@@ -91,6 +99,48 @@ export default function Home() {
           <small>Open this page from Apps in your store admin to enable reconnect.</small>
         )}
       </p>
+      <section className="r2ac-card" style={{ marginTop: 12 }}>
+        <h3>Catalog scan</h3>
+        {job && (job.status === "queued" || job.status === "running") ? (
+          <p><small>Job #{job.id} {job.status} — {job.scanned} scanned, {job.enqueued} enqueued, {job.skipped_verified} held.</small></p>
+        ) : job && job.status === "done" ? (
+          <p className="r2ac-ok"><small>Job #{job.id} complete — {job.scanned} scanned, {job.enqueued} enqueued, {job.skipped_verified} held for review.</small></p>
+        ) : job && job.status === "failed" ? (
+          <p className="r2ac-err"><small>Job #{job.id} failed: {job.error}</small></p>
+        ) : (
+          <p><small>No scans yet.</small></p>
+        )}
+        {scanShop ? (
+          <Form method="post" action="/api/scan">
+            <input type="hidden" name="shop" value={scanShop} />
+            <button type="submit" className="btn btn-primary">Scan existing catalog</button>
+          </Form>
+        ) : (
+          <small>No installed shop to scan.</small>
+        )}
+      </section>
+      {frozen.length > 0 && (
+        <section className="r2ac-card" style={{ marginTop: 12 }}>
+          <h3>Verified rows (frozen)</h3>
+          <ul style={{ margin: 0, paddingLeft: 18 }}>
+            {frozen.map((r) => (
+              <li key={r.video_hash}>
+                <small><code>{r.video_hash.slice(0, 12)}…</code> {r.url} ({r.vision})</small>{" "}
+                <Form method="post" action="/api/release" style={{ display: "inline" }}>
+                  <input type="hidden" name="shop" value={scanShop} />
+                  <input type="hidden" name="video_hash" value={r.video_hash} />
+                  <button type="submit">Release</button>
+                </Form>
+              </li>
+            ))}
+          </ul>
+          <Form method="post" action="/api/release" style={{ marginTop: 8 }}>
+            <input type="hidden" name="shop" value={scanShop} />
+            <input type="hidden" name="all" value="1" />
+            <button type="submit">Release all</button>
+          </Form>
+        </section>
+      )}
       <section className="r2ac-card" style={{ marginTop: 12 }}>
         <h3>Recent webhook deliveries</h3>
         {events.length === 0 ? (
