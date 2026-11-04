@@ -5,6 +5,7 @@ import { db } from "~/lib/db";
 
 type ScanJob = { id: number; shop: string; status: string; scanned: number; enqueued: number; skipped_verified: number; error: string };
 type Ready = { shop: string; token_ok: boolean; missing_scopes: string; mcp: string; rows: number; checked_at: string; checks: number };
+type Ingest = { job_key: string; shop: string; product_id: number | null; source: string; status: string; detail: string; created_at: string };
 
 // Embedded home: pipeline health at a glance. Reads Neon counts only.
 // Styled by the shared r2ac classes in app/tokens.css (same as /connect).
@@ -20,9 +21,10 @@ export async function loader({ request }: LoaderFunctionArgs) {
   let installed: { shop: string; scopes: string }[] = [];
   let job: ScanJob | null = null;
   let readiness: Ready[] = [];
+  let ingest: Ingest[] = [];
   try {
     const sql = db();
-    const [v, p, e, s, j, r] = await Promise.all([
+    const [v, p, e, s, j, r, n] = await Promise.all([
       sql`SELECT COUNT(*)::int AS n FROM video_cache`,
       sql`SELECT COUNT(*)::int AS n FROM video_embeddings`,
       sql`SELECT topic, status, detail, created_at::text AS created_at FROM webhook_events ORDER BY id DESC LIMIT 10`,
@@ -31,6 +33,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       sql`SELECT DISTINCT ON (c.shop) c.shop, c.token_ok, c.missing_scopes, c.mcp, c.rows,
         c.checked_at::text AS checked_at, (SELECT COUNT(*)::int FROM shop_status_checks h WHERE h.shop = c.shop) AS checks
         FROM shop_status_checks c ORDER BY c.shop, c.checked_at DESC`,
+      sql`SELECT job_key, shop, product_id, source, status, detail, created_at::text AS created_at FROM ingest_jobs ORDER BY id DESC LIMIT 10`,
     ]);
     counts = {
       videos: (v as { n: number }[])[0]?.n ?? -1,
@@ -40,14 +43,15 @@ export async function loader({ request }: LoaderFunctionArgs) {
     installed = s as typeof installed;
     job = ((j as ScanJob[])[0] ?? null);
     readiness = r as typeof readiness;
+    ingest = n as typeof ingest;
   } catch {
     // DB unreachable — page still renders, counts show as unavailable.
   }
-  return json({ shop, counts, modal: process.env.MODAL_WEBHOOK_URL ?? null, events, installed, job, readiness, recheck });
+  return json({ shop, counts, modal: process.env.MODAL_WEBHOOK_URL ?? null, events, installed, job, readiness, recheck, ingest });
 }
 
 export default function Home() {
-  const { shop, counts, modal, events, installed, job, readiness, recheck } = useLoaderData<typeof loader>();
+  const { shop, counts, modal, events, installed, job, readiness, recheck, ingest } = useLoaderData<typeof loader>();
   const ok = (n: number) => (n >= 0 ? String(n) : "unavailable");
   const known = shop !== "unknown shop";
   const scanShop = known ? shop : installed[0]?.shop ?? "";
@@ -185,6 +189,26 @@ export default function Home() {
                 </strong>{" "}
                 <small>
                   {ev.detail} · {ev.created_at}
+                </small>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+      <section className="r2ac-card" style={{ marginTop: 12 }}>
+        <h3>Enrichment outcomes</h3>
+        {ingest.length === 0 ? (
+          <small>No payloads sent yet - save a product or run a scan.</small>
+        ) : (
+          <ul style={{ margin: 0, paddingLeft: 18 }}>
+            {ingest.map((n) => (
+              <li key={n.job_key}>
+                <code>{n.source}:{String(n.product_id)}</code> -{" "}
+                <strong className={n.status === "enriched" ? "r2ac-ok" : n.status === "failed" ? "r2ac-err" : ""}>
+                  {n.status === "sent" ? "sent - outcome pending" : n.status}
+                </strong>{" "}
+                <small>
+                  {n.detail} · {n.created_at}
                 </small>
               </li>
             ))}

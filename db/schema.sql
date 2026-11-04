@@ -96,3 +96,20 @@ CREATE TABLE IF NOT EXISTS tag_events (
 );
 CREATE INDEX IF NOT EXISTS tag_events_media
   ON tag_events (media_id, created_at DESC);
+
+-- Ingest job tracking (Vercel -> Modal handoff outcomes). One row per
+-- forwarded payload (webhook or scan); Modal reports back via
+-- /api/ingest-callback on enriched/skipped/failed. Vercel never guesses.
+CREATE TABLE IF NOT EXISTS ingest_jobs (
+  id BIGSERIAL PRIMARY KEY,
+  job_key TEXT UNIQUE NOT NULL,
+  shop TEXT NOT NULL DEFAULT '',
+  product_id BIGINT,
+  source TEXT NOT NULL DEFAULT 'webhook',
+  status TEXT NOT NULL DEFAULT 'sent',
+  detail TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS ingest_jobs_recent ON ingest_jobs (created_at DESC);
+CREATE INDEX IF NOT EXISTS ingest_jobs_shop ON ingest_jobs (shop, created_at DESC);

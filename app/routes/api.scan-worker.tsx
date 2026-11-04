@@ -39,8 +39,10 @@ export async function loader({ request }: LoaderFunctionArgs) {
       products: { id: number; images?: { src?: string }[] }[];
     };
     const next = /page_info=([^>&]+)[^>]*>;\s*rel="next"/.exec(res.headers.get("link") ?? "")?.[1] ?? "";
+    const origin = new URL(request.url).origin;
     let enqueued = 0,
-      held = 0;
+      held = 0,
+      failed = 0;
     for (const p of products) {
       const seen = (await sql`SELECT verified FROM video_embeddings
         WHERE summary->>'product_id' = ${String(p.id)} LIMIT 1`) as { verified: boolean }[];
@@ -48,22 +50,47 @@ export async function loader({ request }: LoaderFunctionArgs) {
         if (seen[0].verified) held++;
         continue;
       }
+      const jobKey = `${job.shop}:${p.id}:scan:${job.id}:${Date.now()}`;
+      try {
+        await sql`INSERT INTO ingest_jobs (job_key, shop, product_id, source)
+          VALUES (${jobKey}, ${job.shop}, ${p.id}, 'scan')
+          ON CONFLICT (job_key) DO NOTHING`;
+      } catch {
+        // tracking never blocks the forward
+      }
       const hero = [...(p.images ?? []).map((i) => i.src).filter(Boolean)].slice(0, 3);
-      await fetch(process.env.MODAL_WEBHOOK_URL ?? "", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          shop: job.shop, topic: "scan", product_id: p.id, video_url: "",
-          hero_images: hero, secret: process.env.MODAL_INGEST_SECRET ?? "",
-        }),
-      }).catch(() => null);
-      enqueued++;
+      try {
+        const fwd = await fetch(process.env.MODAL_WEBHOOK_URL ?? "", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            shop: job.shop, topic: "scan", product_id: p.id, video_url: "",
+            hero_images: hero, secret: process.env.MODAL_INGEST_SECRET ?? "",
+            job_key: jobKey,
+            callback_url: `${origin}/api/ingest-callback`,
+            callback_secret: process.env.MODAL_INGEST_SECRET ?? "",
+          }),
+        });
+        await sql`UPDATE ingest_jobs SET status = ${fwd.ok ? "sent" : "failed"},
+          detail = ${`modal ${fwd.status}`}, updated_at = NOW() WHERE job_key = ${jobKey}`;
+        if (fwd.ok) enqueued++;
+        else failed++;
+      } catch (e) {
+        failed++;
+        try {
+          await sql`UPDATE ingest_jobs SET status = 'failed',
+            detail = ${String(e).slice(0, 200)}, updated_at = NOW() WHERE job_key = ${jobKey}`;
+        } catch {
+          // tracking never blocks the scan
+        }
+      }
     }
     await sql`UPDATE scan_jobs SET status = ${next ? "running" : "done"},
       cursor = ${next}, scanned = scanned + ${products.length},
       enqueued = enqueued + ${enqueued}, skipped_verified = skipped_verified + ${held},
+      error = ${failed ? `${failed} modal forward(s) failed - see enrichment outcomes` : ""},
       updated_at = NOW() WHERE id = ${job.id}`;
-    return json({ ok: true, job: job.id, scanned: products.length, enqueued, held, done: !next });
+    return json({ ok: true, job: job.id, scanned: products.length, enqueued, held, failed, done: !next });
   } catch (e) {
     await sql`UPDATE scan_jobs SET status = 'failed', error = ${String(e).slice(0, 300)},
       updated_at = NOW() WHERE id = ${job.id}`;

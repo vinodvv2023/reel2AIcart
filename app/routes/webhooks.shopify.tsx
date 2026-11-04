@@ -82,18 +82,45 @@ export async function action({ request }: ActionFunctionArgs) {
       await record({ shop, topic, product_id: productId, status: "failed", detail: "MODAL_WEBHOOK_URL missing" });
       return json({ ok: true, topic, enqueued: false });
     }
+    // Outcome tracking: Modal reports back via /api/ingest-callback.
+    const jobKey = `${shop}:${String(productId ?? "na")}:webhook:${Date.now()}`;
+    payload = {
+      ...payload,
+      job_key: jobKey,
+      callback_url: `${new URL(request.url).origin}/api/ingest-callback`,
+      callback_secret: process.env.MODAL_INGEST_SECRET ?? "",
+    };
+    try {
+      const sql = db();
+      await sql`INSERT INTO ingest_jobs (job_key, shop, product_id, source)
+        VALUES (${jobKey}, ${shop}, ${productId}, 'webhook')
+        ON CONFLICT (job_key) DO NOTHING`;
+    } catch {
+      // tracking never blocks the forward
+    }
+    const track = async (status: string, detail: string) => {
+      try {
+        const sql = db();
+        await sql`UPDATE ingest_jobs SET status = ${status},
+          detail = ${detail.slice(0, 300)}, updated_at = NOW() WHERE job_key = ${jobKey}`;
+      } catch {
+        // tracking never breaks the webhook response
+      }
+    };
     try {
       const res = await fetch(process.env.MODAL_WEBHOOK_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
+      await track(res.ok ? "sent" : "failed", `modal ${res.status}`);
       await record({
         shop, topic, product_id: productId,
         status: res.ok ? "forwarded" : "failed",
         detail: `modal ${res.status} hero=${(payload.hero_images as unknown[]).length}${title ? ` ${title}` : ""}`,
       });
     } catch (e) {
+      await track("failed", `modal fetch: ${String(e).slice(0, 200)}`);
       await record({ shop, topic, product_id: productId, status: "failed", detail: `modal fetch: ${String(e)}${title ? ` ${title}` : ""}` });
     }
   }

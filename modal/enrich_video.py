@@ -17,10 +17,14 @@ SECRETS = [modal.Secret.from_name(n) for n in ("neon", "meta", "gemini", "deepin
 
 
 @app.function(image=image, gpu="A10G", timeout=300, secrets=SECRETS)
-def enrich_video(video_url: str, hero_images: list[str], shop: str = "", product_id=None) -> dict:
+def enrich_video(video_url: str, hero_images: list[str], shop: str = "", product_id=None,
+                 job_key: str = "", callback_url: str = "", callback_secret: str = "") -> dict:
     import os
     import psycopg2
     import psycopg2.extras
+
+    def done(status: str, detail: str = "") -> None:
+        _report(callback_url, callback_secret, job_key, status, detail)
 
     if not video_url:
         # Resolve product video via Shopify product-media GraphQL using the
@@ -31,34 +35,57 @@ def enrich_video(video_url: str, hero_images: list[str], shop: str = "", product
         handle = _product_handle(shop, product_id)
     if not video_url and not hero_images:
         print(f"[enrich] skip shop={shop} product={product_id}: no media")
+        done("skipped", "no media")
         return {"video_hash": "", "status": "skipped", "reason": "no media"}
-    video_hash = hashlib.sha256(video_url.encode()).hexdigest()
-    vision, embed = _providers()
-    summary = _vision_summary(video_url, hero_images, shop, product_id, vision)
-    embedding, embed_tag = _embed_for(video_url + "|" + summary["text_seed"], embed)
-    summary["providers"] = {"vision": summary.pop("provider"), "embed": embed_tag}
-    pdp_url = f"https://{shop}/products/{handle}" if shop and handle else (f"https://{shop}/products" if shop else "")
-    summary["pdp_url"] = pdp_url
-    for entry in summary.get("timeline", []):
-        entry["pdp_url"] = entry.get("pdp_url") or pdp_url
-    print(f"[enrich] shop={shop} product={product_id} vision={summary['providers']['vision']} embed={embed_tag} dims={len(embedding)} looks={len(summary['timeline'])}")
-    conn = psycopg2.connect(os.environ["DATABASE_URL"])
-    cur = conn.cursor()
-    vec = "[" + ",".join(f"{v:.6f}" for v in embedding) + "]"
-    cur.execute(
-        "INSERT INTO video_embeddings (id, video_hash, embedding, summary, pdp_url) VALUES (%s,%s,%s::vector,%s,%s)"
-        " ON CONFLICT (video_hash) DO UPDATE SET embedding = EXCLUDED.embedding,"
-        " summary = EXCLUDED.summary, pdp_url = EXCLUDED.pdp_url"
-        " WHERE video_embeddings.verified IS DISTINCT FROM TRUE",
-        (video_hash, video_hash, vec, psycopg2.extras.Json(summary), summary["pdp_url"]),
-    )
-    cur.execute(
-        "INSERT INTO video_cache (video_id, summary) VALUES (%s,%s)"
-        " ON CONFLICT (video_id) DO UPDATE SET summary = EXCLUDED.summary",
-        (video_hash, psycopg2.extras.Json(summary)),
-    )
-    conn.commit()
+    try:
+        video_hash = hashlib.sha256(video_url.encode()).hexdigest()
+        vision, embed = _providers()
+        summary = _vision_summary(video_url, hero_images, shop, product_id, vision)
+        embedding, embed_tag = _embed_for(video_url + "|" + summary["text_seed"], embed)
+        summary["providers"] = {"vision": summary.pop("provider"), "embed": embed_tag}
+        pdp_url = f"https://{shop}/products/{handle}" if shop and handle else (f"https://{shop}/products" if shop else "")
+        summary["pdp_url"] = pdp_url
+        for entry in summary.get("timeline", []):
+            entry["pdp_url"] = entry.get("pdp_url") or pdp_url
+        print(f"[enrich] shop={shop} product={product_id} vision={summary['providers']['vision']} embed={embed_tag} dims={len(embedding)} looks={len(summary['timeline'])}")
+        conn = psycopg2.connect(os.environ["DATABASE_URL"])
+        cur = conn.cursor()
+        vec = "[" + ",".join(f"{v:.6f}" for v in embedding) + "]"
+        cur.execute(
+            "INSERT INTO video_embeddings (id, video_hash, embedding, summary, pdp_url) VALUES (%s,%s,%s::vector,%s,%s)"
+            " ON CONFLICT (video_hash) DO UPDATE SET embedding = EXCLUDED.embedding,"
+            " summary = EXCLUDED.summary, pdp_url = EXCLUDED.pdp_url"
+            " WHERE video_embeddings.verified IS DISTINCT FROM TRUE",
+            (video_hash, video_hash, vec, psycopg2.extras.Json(summary), summary["pdp_url"]),
+        )
+        cur.execute(
+            "INSERT INTO video_cache (video_id, summary) VALUES (%s,%s)"
+            " ON CONFLICT (video_id) DO UPDATE SET summary = EXCLUDED.summary",
+            (video_hash, psycopg2.extras.Json(summary)),
+        )
+        conn.commit()
+    except Exception as exc:
+        print(f"[enrich] failed shop={shop} product={product_id}: {exc}")
+        done("failed", str(exc)[:200])
+        raise
+    done("enriched", video_hash)
     return {"video_hash": video_hash, "status": "enriched", "providers": summary["providers"]}
+
+
+def _report(callback_url: str, secret: str, job_key: str, status: str, detail: str = "") -> None:
+    """Best-effort outcome callback to Vercel. Never breaks enrichment."""
+    if not callback_url or not secret or not job_key:
+        return
+    try:
+        import httpx
+
+        httpx.post(
+            callback_url,
+            json={"job_key": job_key, "status": status, "detail": detail[:300], "secret": secret},
+            timeout=15,
+        )
+    except Exception as exc:
+        print(f"[report] callback failed job={job_key}: {exc}")
 
 
 def _providers() -> tuple[str, str]:
@@ -326,7 +353,9 @@ def ingest(payload: dict) -> dict:
     hero_images = payload.get("hero_images", [])
     print(f"[ingest] shop={payload.get('shop')} product={payload.get('product_id')} heroes={len(hero_images)}")
     enrich_video.spawn(
-        video_url, hero_images, payload.get("shop", ""), payload.get("product_id")
+        video_url, hero_images, payload.get("shop", ""), payload.get("product_id"),
+        payload.get("job_key", ""), payload.get("callback_url", ""),
+        payload.get("callback_secret", ""),
     )
     return {"ok": True, "spawned": True}
 
