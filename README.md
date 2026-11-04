@@ -18,10 +18,10 @@ Core insight: use Muse Spark's native multimodal perception **once per video off
 
 | # | Merchant pain | Old reality | What Reel2AICart does |
 |---|---|---|---|
-| 1 | Manual tagging hell (200 reels × 30 products = 10+ hrs) | Facebook & Instagram app syncs catalog only; merchant tags by hand | Ingestion pulls `/me/media` + YouTube `videos.list`, dedupes by SHA256 hash, enriches once via Muse Spark, auto-tags via `POST /{ig_media_id}/product_tags` and YouTube Shopping feed |
+| 1 | Manual tagging hell (200 reels × 30 products = 10+ hrs) | Facebook & Instagram app syncs catalog only; merchant tags by hand | Ingestion pulls `/me/media`, dedupes by SHA256 hash, enriches once via Muse Spark, auto-tags via `POST /{ig_media_id}/product_tags` (YouTube ingestion + Shopping feed push are stubs — see Not yet implemented) |
 | 2 | Dead video on PDP | Video sits on product page, does nothing | Theme App Extension: video left, products change at 00:08 / 00:15 from timeline JSON, variant pre-selected |
 | 3 | No agent commerce | No MCP for custom stores; agentic storefronts closed beta, not video-aware | MCP server with 4 tools reading Neon cache (<20 ms, zero vision) |
-| 4 | Commerce Account setup hell (`IE_30007`, `IE_30002`, `IE_30010`, "Failed to Replace Commerce Account") | Raw `{{IE_…}}` placeholders, failing loop when account under review | `{{IE_}}` → human message + fallback to on-site widget + YouTube; documents that IG tags only show in the mobile app, not desktop web |
+| 4 | Commerce Account setup hell (`IE_30007`, `IE_30002`, `IE_30010`, "Failed to Replace Commerce Account") | Raw `{{IE_…}}` placeholders, failing loop when account under review | `{{IE_}}` → human message + fallback to on-site widget (YouTube: planned); documents that IG tags only show in the mobile app, not desktop web |
 | 5 | No video attribution | Can't tell if a sale came from a Reel at 00:08 | Every PDP URL carries `?agent_source=instagram_reel&agent_video_id=…&agent_t=08&utm_source=…`; orders attributed via `note_attributes._shopify_video` → `order_attribution` table |
 
 ## Architecture (5 layers)
@@ -37,11 +37,11 @@ Neon Postgres + pgvector (single source of truth)
 MCP Server (Vercel Edge) + IG tags + YouTube feed + Theme widget
 ```
 
-- **L1 Ingestion (Vercel):** Shopify Admin API, IG Graph, YouTube Data API. Webhooks ack 200 in <100 ms, then enqueue to Modal. Hash dedupe (`SHA256(video_url)`).
+- **L1 Ingestion (Vercel):** Shopify Admin API, IG Graph (YouTube: planned). Webhooks ack 200 in <100 ms, then enqueue to Modal. Hash dedupe (`SHA256(video_url)`).
 - **L2 Enrichment (Modal, `modal/enrich_video.py`):** `enrich_video(video_url, hero_images)` on A10G, scales to 0. Vision provider switch via secret (`muse` default, `gemini` planned, `heuristic` fallback). Writes JSON + embedding to Neon. Never called on the hot path.
 - **L3 Index (Neon + pgvector):** `video_embeddings` (hash, `vector(1024)`, summary JSONB, HNSW index) + `video_cache` (replaces Redis) + `shops`, `webhook_events`, `scan_jobs`, `tag_events`, `ingest_jobs`, `order_attribution`. See `db/schema.sql`.
 - **L4 Agent-ready (Vercel Edge + Neon):** MCP at `/mcp/{shop}` — GET legacy query-param shape + POST MCP Streamable HTTP (JSON-RPC: initialize, ping, tools/list, tools/call). Neon reads only.
-- **L5 Activation (Vercel + APIs):** IG product tags, YouTube Content API feed, theme widget, UTM attribution.
+- **L5 Activation (Vercel + APIs):** IG product tags, theme widget, UTM attribution. (YouTube Content API feed: stub.)
 
 **Offline vs online path:** OFFLINE = new hash → Modal → Muse Spark → Neon (~$0.10–0.30/video, once). ONLINE = user/agent → `get_video_summary` hits Neon cache, `search_products` pgvector cosine search — zero inference.
 
@@ -83,18 +83,19 @@ cp .env.example .env   # then fill in values (never commit .env)
 
 | Var | Where from | Purpose |
 |---|---|---|
-| `DATABASE_URL` | Neon dashboard | Postgres + pgvector |
+| `DATABASE_URL` | Neon dashboard → **pooled** connection string (`…-pooler…` + `?sslmode=require`) | Postgres + pgvector. Vercel uses the Neon serverless HTTP driver (`app/lib/db.ts`, no local Postgres); Modal's `psycopg2` uses the same URL as plain Postgres |
 | `SHOPIFY_API_KEY` / `SHOPIFY_API_SECRET` | Shopify Partners dashboard → App → Client ID/Secret | OAuth. Already in `shopify.app.toml` (`client_id = 440af85bd85a43647ef6eb17285200b0`) |
-| `SHOPIFY_APP_URL` | Your Vercel URL (`https://reel2-aicart.vercel.app`) | OAuth callbacks, webhooks |
+| `APP_URL` | Your Vercel URL (default `https://reel2-aicart.vercel.app`) | Base-URL override for `scripts/agent_demo.py` + `bulk_e2e.py` only — the app and `shopify.app.toml` hardcode the URL (see Fork checklist) |
 | `MODAL_WEBHOOK_URL` | Output of `modal deploy modal/enrich_video.py` (the `ingest` endpoint URL) | Vercel → Modal handoff |
 | `MODAL_INGEST_SECRET` | You generate; also set as Modal secret `modal-auth` (`MODAL_INGEST_SECRET`) | Shared secret: Vercel embeds in payload, Modal checks it |
 | `META_GRAPH_TOKEN` | Meta (see Configure Facebook below — system-user token, never expires) | IG media read + product tagging |
 | `IG_USER_ID` | `{page-id}?fields=instagram_business_account` or the Add-account wizard | IG business account id |
 | `META_APP_ID` / `META_APP_SECRET` | Meta App → Settings → Basic | Only for the 60-day token-exchange fallback |
 | `VISION_PROVIDER` / `EMBED_PROVIDER` | Set to `muse` (hackathon default) | Modal secret `app-config` |
-| `MODEL_API_KEY`, `META_BASE_URL`, `MUSE_VISION_MODEL` | dev.meta.ai | Muse Spark vision |
-| `DEEPINFRA_TOKEN` (optional) | DeepInfra dashboard | bge-large embeddings (1024-dim native) |
-| `CRON_SECRET` | You generate (`openssl rand -hex 32`) | Bearer secret for Vercel cron endpoints (`/api/scan-worker`, `/api/attribute-orders`); workers 401 without it |
+| `MODEL_API_KEY` (or `META_API_KEY`), `META_BASE_URL`, `MUSE_VISION_MODEL`, `MUSE_EMBED_MODEL` | dev.meta.ai | Modal Muse vision + embeddings (`MUSE_EMBED_MODEL` optional — unset falls back to hash vectors). `MODEL_API_KEY` doubles as the /agent Ask-tab Muse key |
+| `DEEPINFRA_TOKEN`, `DEEPINFRA_EMBED_MODEL` | DeepInfra dashboard | bge-large (native 1024-dim). Modal embeddings when `EMBED_PROVIDER=deepinfra` AND the server-side bge re-rank in `/mcp` + `/agent` search — unset silently falls back to hash/text matching |
+| `CRON_SECRET` | You generate (`openssl rand -hex 32`) | Bearer secret for Vercel cron endpoints (`/api/scan-worker`, `/api/attribute-orders`). Just set the var — Vercel automatically sends `Authorization: Bearer <CRON_SECRET>` on cron invocations, no extra config |
+| `XAI_API_KEY`, `GROK_MODEL` | x.ai console | /agent Ask-tab second provider (`grok`). Muse (default) needs no extra var beyond `MODEL_API_KEY` |
 
 ### 4. Modal worker
 
@@ -144,6 +145,16 @@ shopify app deploy     # pushes shopify.app.toml (scopes, webhooks, theme extens
 
 `shopify.app.toml` already declares the scopes, webhooks, theme app extension (`extensions/shoppable-video-widget`), and redirect URLs listed above.
 
+#### 5b. Fork checklist — the app URL is hardcoded
+
+No `SHOPIFY_APP_URL` env var is read anywhere. Before deploying under your own domain, replace `https://reel2-aicart.vercel.app` in: `shopify.app.toml` (`application_url`, both `redirect_urls`, webhook `uri`), and `app/routes/auth.login.tsx` (`redirect_uri` — OAuth fails with a redirect mismatch otherwise, **including** `shopify app dev` tunnel URLs). Optionally also `public/openapi.yaml` and `app/routes/agent.tsx` (fallback shop); `scripts/*.py` already accept an `APP_URL` env override. Find every spot with:
+
+```bash
+rg "reel2-aicart\.vercel\.app" --glob '!node_modules' --glob '!.git'
+```
+
+Then mirror the same URLs in the dev-dashboard Configuration (§5 step 4) and redeploy (`shopify app deploy`).
+
 ### 6. Deploy web (Vercel)
 
 ```bash
@@ -167,9 +178,23 @@ These are the Shopify-side pieces the app depends on:
 
 1. **Reel2AICart custom app (this repo)** — install on the store via the Partners-dashboard install link (private distribution, see banner above). Grants `read_products, read_inventory, read_content, write_content, read_orders`; subscribes to product/inventory webhooks. Required for sync, enrichment triggers, and MCP data.
 2. **Facebook & Instagram sales channel** (public, Shopify App Store, by Meta — free) — this is the bridge that syncs your Shopify catalog to Meta. Reel2AICart depends on it: the `/connect` tag flow sends the Shopify **variant ID as the Meta catalog product ID**, so tagging only works if this channel has synced that variant into the Meta catalog. See §2a below for the full connect walkthrough.
-3. **Theme App Extension** (`extensions/shoppable-video-widget/`) — shipped in this repo via `shopify.app.toml`. After deploy: Online Store → Themes → Customize → App embeds/blocks → enable the Reel2AICart shoppable video block on PDPs. It reads timeline JSON from the Vercel API.
+3. **Theme App Extension** (`extensions/shoppable-video-widget/`) — shipped in this repo via `shopify.app.toml`. After deploy: Online Store → Themes → Customize → add the **Shoppable Video** block to the PDP template. Block settings: **Video ID** = the `video_hash` from Neon (dashboard Enrichment outcomes / `video_cache.video_id`), **Video URL** = MP4 or embed. On load the widget GETs the timeline and swaps the product rail as the video plays (`timeupdate` vs timeline `t`), appending `utm_source=reel2aicart&utm_medium=shoppable&utm_campaign=<video_id>&utm_content=<t>` to PDP links.
+   - ⚠️ **Same-origin gotcha:** `assets/widget.js` fetches the **relative** path `/api/video-summary?video_id=…`, which on the storefront resolves against `*.myshopify.com` (404) — not your Vercel app. There is no app proxy in `shopify.app.toml`. Before the widget can render products, point that fetch at your absolute app URL (`https://<your-app>/api/video-summary?video_id=…`) or add an app proxy. Until then the block shows its fallback text ("Products in this video will appear here").
 4. **Products with media** — upload at least one video (or external/YouTube video) or hero images per product; enrichment resolves media via product-media GraphQL and falls back to hero images.
-5. **Checkout note attributes** — the widget appends `note_attributes[_shopify_video]` to the cart so `/api/attribute-orders` (cron) can write `order_attribution` rows visible in Shopify Analytics via UTM params.
+5. **Video attribution chain (you must wire the middle link).** Both order readers look for a **`_shopify_video` order note attribute**: the `/api/attribute-orders` cron reads order `customAttributes` via GraphQL, and `/webhooks/orders` reads `note_attributes` from the webhook/Flow payload — either writes `order_attribution` rows visible in Shopify Analytics via UTM params. The widget only sets a **`_shopify_video` cookie** (`assets/widget.js`) — **nothing in this repo copies that cookie into cart/checkout note attributes yet**, so without your bridge, attribution silently records nothing. Minimal bridge (theme JS, runs before checkout):
+   ```js
+   fetch('/cart/update.js', { method: 'POST',
+     headers: { 'Content-Type': 'application/json' },
+     body: JSON.stringify({ attributes: { _shopify_video: getCookie('_shopify_video') } }) });
+   ```
+   (Cookie value is the video_id; only set it when present.)
+
+   #### 5a. Attribution without approval — Shopify Flow (recommended until `orders/*` webhooks are approved)
+   The native `orders/create` webhook carries protected customer data and needs Shopify approval before it fires. Skip the wait: a Shopify Flow **Send HTTP request** action needs no approval:
+   - Trigger: Order created. Action: Send HTTP request → POST `https://<your-app>/webhooks/orders`.
+   - Headers: `x-flow-secret: <CRON_SECRET>` (same value as Vercel env — the endpoint accepts this instead of HMAC).
+   - Body: any JSON with `id` plus `note_attributes[]` or a direct `video_id` (e.g. `{"id": "{{order.id}}", "note_attributes": {{order.noteAttributes}}}`) — see `app/routes/webhooks.orders.tsx`.
+   - Verify: dashboard Recent webhook deliveries shows `orders/flow → attributed`.
 
 ### 2a. Connecting "Facebook & Instagram by Meta" (step-by-step)
 
@@ -206,7 +231,7 @@ Instagram tagging goes through Meta — set these up once per merchant:
    - **Domain verify** the store domain (Business Settings → Brand Safety → Domains) — fixes `IE_30002` domain-mismatch errors.
 3. **Commerce Account + catalog (Commerce Manager** ([business.facebook.com/commerce](https://business.facebook.com/commerce)**)):**
    - Create a Commerce Account → attach the catalog synced by the Shopify Facebook & Instagram channel → submit for review.
-   - `IE_30007` = catalog not approved → fix here. `IE_30010` = account under review → keep selling via the on-site widget + YouTube meanwhile (the app shows this message instead of the raw `{{IE_…}}` placeholder).
+   - `IE_30007` = catalog not approved → fix here. `IE_30010` = account under review → keep selling via the on-site widget meanwhile (YouTube: planned; the app shows this message instead of the raw `{{IE_…}}` placeholder).
    - Connect the **Facebook & Instagram** sales channel in Shopify to this same Commerce Account (walkthrough in §2a above).
 4. **System-user token (recommended — never expires):**
    - Business Settings → System Users → Admin system user → Add assets (Page, IG account, catalog, App) → Generate token with the scopes above → set as `META_GRAPH_TOKEN`.
@@ -214,11 +239,17 @@ Instagram tagging goes through Meta — set these up once per merchant:
 5. **Find `IG_USER_ID`:** `GET {page-id}?fields=instagram_business_account` with the token, or use the in-app Add-account wizard.
 6. **In-app:** open `/connect` → status shows connected when `META_GRAPH_TOKEN + IG_USER_ID` are set. Pick reel (left) + product/variant (right) → review → **Tag products on reel**. Verify on **Instagram mobile app** — product tags do **not** render on desktop web (`instagram.com/.../reels` shows no View Products; this is a Meta limitation, documented in-app).
 
+## Not yet implemented (stubs with TODOs — don't mistake for bugs)
+
+- **YouTube:** ingestion (`videos.list`) + Shopping feed push — `app/lib/activation/youtube.ts` is a `TODO` stub; all YouTube mentions elsewhere describe the target design, not working code.
+- **Gemini vision:** Modal `_vision_summary` falls through to `heuristic-v1`; wire it later via the `app-config` secret (no code change to flip providers).
+- **Muse embeddings:** until `MUSE_EMBED_MODEL` is set, vectors are deterministic hash-LCG (rank-compatible with stored rows, not semantic).
+
 ## Usage
 
 - `/` — dashboard: video cache / embedding counts, enrichment worker status, Scan existing catalog, store readiness (webMCP), webhook deliveries, enrichment outcomes, agent search FAB.
 - `/connect` — Tag-a-reel workspace (reels left, products right, review table, tag action; history in `tag_events`).
-- `/agent` — full chat/search over shoppable videos with PDP links.
+- `/agent` — full chat/search over shoppable videos with PDP links. Two tabs: **Ask** (multi-turn function-calling; `muse` default via `MODEL_API_KEY`, hardcoded model `muse-spark-1.3-contributor` — or `grok` via `XAI_API_KEY` + `GROK_MODEL`) and **Search** (direct vector cards over `/mcp`; bge re-rank needs `DEEPINFRA_TOKEN`). Ask links carry `utm_source=agent-chat`.
 - `/scan?shop=…` — scan progress page.
 - `/mcp/{shop}` — MCP endpoint. Tools: `search_products(query, image_embedding?, price_max?)`, `get_product_details(sku)`, `get_inventory(sku)`, `get_video_summary(video_id)`. GET legacy params or POST MCP Streamable HTTP.
 - `/openapi.yaml` — agent entry contract.
@@ -227,12 +258,18 @@ Instagram tagging goes through Meta — set these up once per merchant:
 
 | Symptom | Cause → Fix |
 |---|---|
-| `{{IE_30007}}` / `{{IE_30002}}` / `{{IE_30010}}`, "Failed to Replace Commerce Account" | Commerce Account issue — app humanizes it: catalog not approved / domain mismatch / under review → fix in Commerce Manager; use on-site widget + YouTube meanwhile |
+| `{{IE_30007}}` / `{{IE_30002}}` / `{{IE_30010}}`, "Failed to Replace Commerce Account" | Commerce Account issue — app humanizes it: catalog not approved / domain mismatch / under review → fix in Commerce Manager; use on-site widget meanwhile (YouTube: planned) |
 | No View Products on reel (desktop web) | Expected — Meta only renders IG product tags in the mobile app; test on phone |
 | `IG keys missing` / `IG API 4xx` on `/connect` | `META_GRAPH_TOKEN`/`IG_USER_ID` unset or expired → regenerate system-user token |
 | `Shopify API 401` | Token dead → Reconnect store; readiness card shows `token: dead` + missing scopes |
 | Enrichment stuck `sent` | `MODAL_WEBHOOK_URL`/secret mismatch, or product has no media → check `ingest_jobs.detail`, Modal logs |
 | Verified rows overwritten | Impossible by design — upsert has `WHERE verified IS DISTINCT FROM TRUE`; release per row explicitly |
+| Widget shows fallback text, no products | `widget.js` relative `/api/video-summary` fetch 404s on the storefront → use the absolute app URL or an app proxy (see Configure Shopify item 3); also confirm block Video ID = `video_hash` |
+| OAuth "redirect_uri is not whitelisted" (incl. `shopify app dev` tunnel) | `auth.login.tsx` hardcodes the prod URL → Fork checklist (§5b) |
+| Attribution rows never appear | Cookie→note bridge missing (Configure Shopify item 5); or Flow `x-flow-secret` ≠ `CRON_SECRET`; or native orders webhook pending approval → use Flow (§5a) |
+| Cron endpoints 401 in logs | Normal if `CRON_SECRET` unset — set it in Vercel env; Vercel sends the header automatically |
+| YouTube feed / Gemini vision missing | Stubs, not bugs — `app/lib/activation/youtube.ts` is a TODO, Modal `gemini` provider is planned (see Not yet implemented) |
+| `docs/` empty after clone | Expected — `docs/` is gitignored (local-only). Key decisions are summarized in this README |
 
 ## Project structure
 
@@ -243,8 +280,10 @@ app/                  Remix app (Vercel)
   tokens.css          shared r2ac styles
 extensions/shoppable-video-widget/   Theme App Extension (PDP widget)
 modal/enrich_video.py Modal GPU: Muse vision + embeddings → Neon (+ ingest webhook)
-db/schema.sql         Neon tables + pgvector HNSW index
-docs/                 PRD, checklists, scan/activation, tag visibility
+db/schema.sql         Neon tables + pgvector HNSW index (re-runnable: all `IF NOT EXISTS`)
+db/cleanup-shop.sql   Fresh-start reset (Neon-SQL-editor-safe; psql `\set` unsupported there)
+docs/                 PRD, checklists, scan/activation, tag visibility — GITIGNORED, local-only: fresh clones don't get it
+scripts/              agent_demo.py (MCP function-calling demo) + bulk_e2e.py (Modal-parity bulk enrich)
 shopify.app.toml      App config: scopes, webhooks, extension
 ```
 
@@ -257,4 +296,5 @@ Vercel Pro ($0–20) + Neon (free 0.5 GB, then ~$5) + Modal pay-per-second (~$10
 - `npm run dev` — local Remix dev
 - `npm run build` — production build
 - `npx tsc --noEmit` — typecheck (`npm run typecheck`)
-- `python scripts/agent_demo.py` / `bulk_e2e.py` — MCP demo / bulk E2E helpers
+- `python scripts/agent_demo.py "maroon gown"` — Muse function-calling over MCP tools. Needs `MODEL_API_KEY` in env; `APP_URL`/`SHOP` env overrides (defaults: prod app + test shop). Stdlib only.
+- `python scripts/bulk_e2e.py [--write] [--shop SHOP]` — Modal-parity bulk enrichment + MCP probes. Default is dry-run; `--write` upserts `provider=bulk-local-v1` rows (needs `DATABASE_URL` in `.env` + `psycopg2-binary` in `.venv`). Clean up test rows with: `DELETE FROM video_cache WHERE video_id IN (SELECT video_hash FROM video_embeddings WHERE summary->>'provider'='bulk-local-v1'); DELETE FROM video_embeddings WHERE summary->>'provider'='bulk-local-v1';`
