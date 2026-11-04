@@ -137,7 +137,6 @@ export default function Agent() {
       <nav aria-label="Agent modes" style={{ display: "flex", gap: 8, marginTop: 12 }}>
         <a href="/agent?tab=ask" style={{ borderRadius: 999, padding: "8px 16px", fontWeight: 600, textDecoration: "none", background: tab === "ask" ? "#0f4c4a" : "#fff", color: tab === "ask" ? "#fff" : "#0f4c4a", border: "1px solid #0f4c4a" }}>Ask</a>
         <a href="/agent?tab=search" style={{ borderRadius: 999, padding: "8px 16px", fontWeight: 600, textDecoration: "none", background: tab === "search" ? "#0f4c4a" : "#fff", color: tab === "search" ? "#fff" : "#0f4c4a", border: "1px solid #0f4c4a" }}>Search</a>
-        <a href="https://chatgpt.com/plugins/plugins_6ae9b15de5288191a3ad5ee79a2e2d68?utm_source=chatgpt.com" target="_blank" rel="noreferrer noopener" title="Open the Reel2AICart plugin in ChatGPT (new tab)" style={{ borderRadius: 999, padding: "8px 16px", fontWeight: 600, textDecoration: "none", background: "#fff", color: "#0f4c4a", border: "1px dashed #0f4c4a" }}>ChatGPT plugin ↗</a>
       </nav>
 
       {tab === "search" ? (
