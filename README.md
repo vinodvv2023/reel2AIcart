@@ -108,6 +108,18 @@ modal deploy modal/enrich_video.py
 # copy the ingest endpoint URL → MODAL_WEBHOOK_URL in Vercel + .env
 ```
 
+#### 4a. How it works (`modal/enrich_video.py`, app `reel2aicart-enrich`)
+
+- **`ingest` — front door (CPU-only, 60s).** Modal web endpoint. Vercel POSTs `{video_url, hero_images, shop, product_id, job_key, callback_url, callback_secret, secret}`; wrong/missing `secret` (checked against `modal-auth`) → 401, nothing spawned. Otherwise `enrich_video.spawn(...)` and return `{ok, spawned}` immediately — Vercel never waits for GPU work.
+- **`enrich_video` — GPU worker (A10G, 300s, scales to 0).**
+  - *Media resolution:* no `video_url`? Resolves via Shopify product-media GraphQL with the stored token from `shops`. No media at all → `skipped`.
+  - *Dedupe:* `video_hash = SHA256(video_url)` — one video, one inference, forever.
+  - *Vision* (provider from `app-config`, `muse` default): Muse Spark via Meta Model API (OpenAI-compatible chat) — prompt + ≤3 hero images, retrying while dropping one image at a time on `media_url_not_fetchable` → `{products[], scene}` mapped to the timeline contract (`00:00/00:08/00:15`). Any failure → `heuristic-v1` fallback; `gemini` stubbed for later.
+  - *Embedding:* Muse (if `MUSE_EMBED_MODEL` set) → DeepInfra `bge-large` (native 1024-dim) → hash-LCG fallback that exactly mirrors `app/lib/video/embed.ts` (so MCP query vectors rank correctly). All vectors fit to 1024 dims + L2-normed for the `vector(1024)` HNSW index.
+  - *Write:* upserts `video_embeddings` (`ON CONFLICT(video_hash) DO UPDATE` guarded by `WHERE verified IS DISTINCT FROM TRUE`) + `video_cache`.
+  - *Callback:* best-effort POST to `/api/ingest-callback` with the shared secret → `ingest_jobs` goes `sent → enriched/skipped/failed`. Never breaks enrichment if Vercel is unreachable.
+- **Secrets:** `neon, meta, gemini, deepinfra, app-config` on the worker, `modal-auth` only on `ingest`. Create placeholder values for unused providers so deploy never fails — switching providers is a secret change, zero code change.
+
 ### 5. Shopify app (via [dev.shopify.com](https://dev.shopify.com))
 
 All app identity, stores, and installs live in the Shopify dev dashboard — do this once before/instead of the CLI:
