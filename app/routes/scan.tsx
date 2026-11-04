@@ -47,11 +47,19 @@ export default function Scan() {
         {!job ? (
           <p><small>No scans yet.</small></p>
         ) : open ? (
-          <p><small>Job #{job.id} {job.status} (auto-refreshes every 30s) — {job.scanned} scanned, {job.enqueued} enqueued, {job.skipped_verified} held for review.</small></p>
+          <p><small>Scan in progress (this page refreshes itself) — checked {job.scanned} items so far, {job.enqueued} sent for image and video analysis{job.skipped_verified > 0 ? `, ${job.skipped_verified} need your review below` : ""}.</small></p>
         ) : job.status === "done" ? (
-          <p className="r2ac-ok"><small>Job #{job.id} complete — {job.scanned} scanned, {job.enqueued} enqueued, {job.skipped_verified} held for review.</small></p>
+          <>
+            <p className="r2ac-ok"><small>Scan complete. All done — nothing left for you to do{job.skipped_verified > 0 ? " except the review items below" : ""}.</small></p>
+            <ul style={{ margin: "8px 0", paddingLeft: 18 }}>
+              <li><small>Checked all {job.scanned} store items.</small></li>
+              <li><small>{job.scanned - job.enqueued - job.skipped_verified} already done — skipped, no repeat work.</small></li>
+              <li><small>{job.enqueued} sent for image and video analysis — finishes on its own in a few minutes.</small></li>
+              <li><small>{job.skipped_verified === 0 ? "Nothing needs your review." : `${job.skipped_verified} need your review below.`}</small></li>
+            </ul>
+          </>
         ) : (
-          <p className="r2ac-err"><small>Job #{job.id} failed: {job.error}</small></p>
+          <p className="r2ac-err"><small>Scan stopped with an error: {job.error} Try again from the dashboard.</small></p>
         )}
         <p><a className="btn btn-ghost" href={shop ? `/?shop=${encodeURIComponent(shop)}` : "/"}>Back to dashboard</a></p>
       </section>

@@ -110,11 +110,11 @@ export default function Home() {
           return (
             <>
               {job && open ? (
-                <p><small>Job #{job.id} {job.status} — {job.scanned} scanned, {job.enqueued} enqueued, {job.skipped_verified} held.</small></p>
+                <p><small>Scan in progress — {job.scanned} checked, {job.enqueued} being analyzed.</small></p>
               ) : job && job.status === "done" ? (
-                <p className="r2ac-ok"><small>Job #{job.id} complete — {job.scanned} scanned, {job.enqueued} enqueued, {job.skipped_verified} held.</small></p>
+                <p className="r2ac-ok"><small>Scan complete — {job.scanned} checked, {job.enqueued} analyzed{job.skipped_verified > 0 ? `, ${job.skipped_verified} need review` : ""}.</small></p>
               ) : job && job.status === "failed" ? (
-                <p className="r2ac-err"><small>Job #{job.id} failed: {job.error}</small></p>
+                <p className="r2ac-err"><small>Scan stopped: {job.error}</small></p>
               ) : (
                 <p><small>Backfill enrichment without manual re-saves. Verified rows are never touched.</small></p>
               )}
