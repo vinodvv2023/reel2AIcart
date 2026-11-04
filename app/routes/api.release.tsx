@@ -10,11 +10,12 @@ export async function action({ request }: ActionFunctionArgs) {
   const shop = String(form.get("shop") ?? "");
   const hash = String(form.get("video_hash") ?? "");
   const all = String(form.get("all") ?? "") === "1";
+  const back = String(form.get("from") ?? "") === "scan" ? "/scan" : "/";
   const sql = db();
   if (all) {
     await sql`UPDATE video_embeddings SET verified = FALSE WHERE verified`;
   } else if (hash) {
     await sql`UPDATE video_embeddings SET verified = FALSE WHERE video_hash = ${hash}`;
   }
-  return redirect(shop ? `/?shop=${encodeURIComponent(shop)}` : "/");
+  return redirect(shop ? `${back}?shop=${encodeURIComponent(shop)}` : back);
 }

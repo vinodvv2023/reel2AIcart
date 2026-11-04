@@ -34,7 +34,7 @@ export async function action({ request }: ActionFunctionArgs) {
     if (!open.length) {
       await sql`INSERT INTO scan_jobs (shop) VALUES (${shop})`;
     }
-    return redirect(`/?shop=${encodeURIComponent(shop)}`);
+    return redirect(`/scan?shop=${encodeURIComponent(shop)}`);
   }
   if (open.length) return json({ ok: true, job_id: open[0].id, resumed: true });
   const rows = (await sql`INSERT INTO scan_jobs (shop) VALUES (${shop})
