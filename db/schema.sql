@@ -51,3 +51,34 @@ CREATE TABLE IF NOT EXISTS order_attribution (
   video_id TEXT NOT NULL DEFAULT '',
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- HITL frozen copies: verified rows are never overwritten by scans or
+-- webhooks without an explicit per-row Release (see docs/SCAN_AND_ACTIVATION.md).
+ALTER TABLE video_embeddings ADD COLUMN IF NOT EXISTS verified BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- Scan jobs: full history (queued|running|done|failed), cursor-resumed.
+CREATE TABLE IF NOT EXISTS scan_jobs (
+  id BIGSERIAL PRIMARY KEY,
+  shop TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'queued',
+  cursor TEXT NOT NULL DEFAULT '',
+  scanned INT NOT NULL DEFAULT 0,
+  enqueued INT NOT NULL DEFAULT 0,
+  skipped_verified INT NOT NULL DEFAULT 0,
+  error TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Readiness history: one row per activation check (latest = current state).
+CREATE TABLE IF NOT EXISTS shop_status_checks (
+  id BIGSERIAL PRIMARY KEY,
+  shop TEXT NOT NULL DEFAULT '',
+  checked_at TIMESTAMPTZ DEFAULT NOW(),
+  token_ok BOOLEAN NOT NULL DEFAULT FALSE,
+  missing_scopes TEXT NOT NULL DEFAULT '',
+  mcp TEXT NOT NULL DEFAULT 'error',
+  rows INT NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS shop_status_checks_recent
+  ON shop_status_checks (shop, checked_at DESC);
