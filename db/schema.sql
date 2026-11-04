@@ -82,3 +82,17 @@ CREATE TABLE IF NOT EXISTS shop_status_checks (
 );
 CREATE INDEX IF NOT EXISTS shop_status_checks_recent
   ON shop_status_checks (shop, checked_at DESC);
+
+-- Tagging history: our own record of tag attempts (layer 1 of tag
+-- visibility; survives token expiry and shows failures too).
+CREATE TABLE IF NOT EXISTS tag_events (
+  id BIGSERIAL PRIMARY KEY,
+  shop TEXT NOT NULL DEFAULT '',
+  media_id TEXT NOT NULL DEFAULT '',
+  variant_id TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'ok',
+  detail TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS tag_events_media
+  ON tag_events (media_id, created_at DESC);

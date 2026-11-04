@@ -71,6 +71,23 @@ export async function loader({ request }: LoaderFunctionArgs) {
     : products;
   const pages = Math.max(1, Math.ceil(matched.length / PER_PAGE));
   const page = Math.min(pg, pages);
+  let taggedHere: Record<string, { variant: string; when: string; status: string }> = {};
+  try {
+    const sql = db();
+    const rows = (await sql`SELECT DISTINCT ON (media_id) media_id,
+      variant_id, status, created_at::text AS created_at FROM tag_events
+      ORDER BY media_id, created_at DESC`) as {
+      media_id: string;
+      variant_id: string;
+      status: string;
+      created_at: string;
+    }[];
+    for (const r of rows) {
+      taggedHere[r.media_id] = { variant: r.variant_id, when: r.created_at.slice(0, 10), status: r.status };
+    }
+  } catch {
+    // history is additive; page works without it
+  }
   return json({
     hint: humanizeCommerceError("{{IE_30010}}"),
     ig: Boolean(process.env.META_GRAPH_TOKEN && process.env.IG_USER_ID),
@@ -84,6 +101,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     q,
     rq,
     productId,
+    taggedHere,
   });
 }
 
@@ -98,9 +116,23 @@ export async function action({ request }: ActionFunctionArgs) {
     return json({ ok: false as const, error: "META_GRAPH_TOKEN missing in Vercel env." }, { status: 500 });
   try {
     await tagInstagram(mediaId, variantId, token);
+    await logTag(mediaId, variantId, "ok", "");
     return json({ ok: true as const, mediaId });
   } catch (e) {
-    return json({ ok: false as const, error: e instanceof Error ? e.message : "Tagging failed." });
+    const error = e instanceof Error ? e.message : "Tagging failed.";
+    await logTag(mediaId, variantId, "failed", error);
+    return json({ ok: false as const, error });
+  }
+}
+
+async function logTag(mediaId: string, variantId: string, status: string, detail: string) {
+  try {
+    const sql = db();
+    const shops = (await sql`SELECT shop FROM shops LIMIT 1`) as { shop: string }[];
+    await sql`INSERT INTO tag_events (shop, media_id, variant_id, status, detail)
+      VALUES (${shops[0]?.shop ?? ""}, ${mediaId}, ${variantId}, ${status}, ${detail.slice(0, 300)})`;
+  } catch {
+    // logging never breaks the tagging response
   }
 }
 
@@ -108,7 +140,7 @@ const qs = (p: Record<string, string>) =>
   `?${Object.entries(p).filter(([, v]) => v).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join("&")}`;
 
 export default function Connect() {
-  const { hint, ig, reels, reelsError, products, productsError, total, page, pages, q, rq, productId } =
+  const { hint, ig, reels, reelsError, products, productsError, total, page, pages, q, rq, productId, taggedHere } =
     useLoaderData<typeof loader>();
   const result = useActionData<typeof action>();
   const selected = products.find((p) => String(p.id) === productId);
@@ -122,6 +154,9 @@ export default function Connect() {
           Reel2<span style={{ color: "#ff7a5c" }}>AI</span>Cart
         </strong>
       </header>
+      <p style={{ marginTop: 12 }}>
+        <a className="btn btn-ghost" href="/">Back to dashboard</a>
+      </p>
 
       <section className="r2ac-card" style={{ marginTop: 16 }}>
         <h2>Tag Instagram reels with your products</h2>
@@ -170,6 +205,16 @@ export default function Connect() {
                       <strong>{reel.caption?.slice(0, 80) || "(no caption)"}</strong>
                       <br />
                       <small>{reel.id} · {reel.timestamp?.slice(0, 10)}</small>
+                      {taggedHere[reel.id] && (
+                        <>
+                          <br />
+                          <small className={taggedHere[reel.id].status === "ok" ? "r2ac-ok" : "r2ac-err"}>
+                            {taggedHere[reel.id].status === "ok"
+                              ? `Tagged here on ${taggedHere[reel.id].when}`
+                              : `Tag attempt failed ${taggedHere[reel.id].when}`}
+                          </small>
+                        </>
+                      )}
                     </span>
                   </label>
                 ))}
