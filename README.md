@@ -92,6 +92,7 @@ cp .env.example .env   # then fill in values (never commit .env)
 | `VISION_PROVIDER` / `EMBED_PROVIDER` | Set to `muse` (hackathon default) | Modal secret `app-config` |
 | `MODEL_API_KEY`, `META_BASE_URL`, `MUSE_VISION_MODEL` | dev.meta.ai | Muse Spark vision |
 | `DEEPINFRA_TOKEN` (optional) | DeepInfra dashboard | bge-large embeddings (1024-dim native) |
+| `CRON_SECRET` | You generate (`openssl rand -hex 32`) | Bearer secret for Vercel cron endpoints (`/api/scan-worker`, `/api/attribute-orders`); workers 401 without it |
 
 ### 4. Modal worker
 
