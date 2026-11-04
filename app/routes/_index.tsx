@@ -15,17 +15,15 @@ export async function loader({ request }: LoaderFunctionArgs) {
   let events: { topic: string; status: string; detail: string; created_at: string }[] = [];
   let installed: { shop: string; scopes: string }[] = [];
   let job: ScanJob | null = null;
-  let frozen: { video_hash: string; url: string; vision: string }[] = [];
   let readiness: Ready[] = [];
   try {
     const sql = db();
-    const [v, p, e, s, j, f, r] = await Promise.all([
+    const [v, p, e, s, j, r] = await Promise.all([
       sql`SELECT COUNT(*)::int AS n FROM video_cache`,
       sql`SELECT COUNT(*)::int AS n FROM video_embeddings`,
       sql`SELECT topic, status, detail, created_at::text AS created_at FROM webhook_events ORDER BY id DESC LIMIT 10`,
       sql`SELECT shop, scopes FROM shops ORDER BY installed_at DESC`,
       sql`SELECT id, shop, status, scanned, enqueued, skipped_verified, error FROM scan_jobs ORDER BY id DESC LIMIT 1`,
-      sql`SELECT video_hash, summary->>'video_url' AS url, summary->'providers'->>'vision' AS vision FROM video_embeddings WHERE verified ORDER BY video_hash LIMIT 50`,
       sql`SELECT DISTINCT ON (c.shop) c.shop, c.token_ok, c.missing_scopes, c.mcp, c.rows,
         c.checked_at::text AS checked_at, (SELECT COUNT(*)::int FROM shop_status_checks h WHERE h.shop = c.shop) AS checks
         FROM shop_status_checks c ORDER BY c.shop, c.checked_at DESC`,
@@ -37,16 +35,15 @@ export async function loader({ request }: LoaderFunctionArgs) {
     events = e as typeof events;
     installed = s as typeof installed;
     job = ((j as ScanJob[])[0] ?? null);
-    frozen = f as typeof frozen;
     readiness = r as typeof readiness;
   } catch {
     // DB unreachable — page still renders, counts show as unavailable.
   }
-  return json({ shop, counts, modal: process.env.MODAL_WEBHOOK_URL ?? null, events, installed, job, frozen, readiness });
+  return json({ shop, counts, modal: process.env.MODAL_WEBHOOK_URL ?? null, events, installed, job, readiness });
 }
 
 export default function Home() {
-  const { shop, counts, modal, events, installed, job, frozen, readiness } = useLoaderData<typeof loader>();
+  const { shop, counts, modal, events, installed, job, readiness } = useLoaderData<typeof loader>();
   const ok = (n: number) => (n >= 0 ? String(n) : "unavailable");
   const known = shop !== "unknown shop";
   const scanShop = known ? shop : installed[0]?.shop ?? "";
@@ -108,46 +105,38 @@ export default function Home() {
       </p>
       <section className="r2ac-card" style={{ marginTop: 12 }}>
         <h3>Catalog scan</h3>
-        {job && (job.status === "queued" || job.status === "running") ? (
-          <p><small>Job #{job.id} {job.status} — {job.scanned} scanned, {job.enqueued} enqueued, {job.skipped_verified} held.</small></p>
-        ) : job && job.status === "done" ? (
-          <p className="r2ac-ok"><small>Job #{job.id} complete — {job.scanned} scanned, {job.enqueued} enqueued, {job.skipped_verified} held for review.</small></p>
-        ) : job && job.status === "failed" ? (
-          <p className="r2ac-err"><small>Job #{job.id} failed: {job.error}</small></p>
-        ) : (
-          <p><small>No scans yet.</small></p>
-        )}
-        {scanShop ? (
-          <Form method="post" action="/api/scan">
-            <input type="hidden" name="shop" value={scanShop} />
-            <button type="submit" className="btn btn-primary">Scan existing catalog</button>
-          </Form>
-        ) : (
-          <small>No installed shop to scan.</small>
-        )}
+        {(() => {
+          const open = job && (job.status === "queued" || job.status === "running");
+          return (
+            <>
+              {job && open ? (
+                <p><small>Job #{job.id} {job.status} — {job.scanned} scanned, {job.enqueued} enqueued, {job.skipped_verified} held.</small></p>
+              ) : job && job.status === "done" ? (
+                <p className="r2ac-ok"><small>Job #{job.id} complete — {job.scanned} scanned, {job.enqueued} enqueued, {job.skipped_verified} held.</small></p>
+              ) : job && job.status === "failed" ? (
+                <p className="r2ac-err"><small>Job #{job.id} failed: {job.error}</small></p>
+              ) : (
+                <p><small>Backfill enrichment without manual re-saves. Verified rows are never touched.</small></p>
+              )}
+              <p>
+                {scanShop && !open ? (
+                  <Form method="post" action="/api/scan" style={{ display: "inline" }}>
+                    <input type="hidden" name="shop" value={scanShop} />
+                    <button type="submit" className="btn btn-primary">Scan existing catalog</button>
+                  </Form>
+                ) : scanShop ? (
+                  <button type="button" className="btn btn-primary" disabled>Scan in progress</button>
+                ) : (
+                  <small>No installed shop to scan.</small>
+                )}{" "}
+                {scanShop && (
+                  <a className="btn btn-ghost" href={`/scan?shop=${encodeURIComponent(scanShop)}`}>Watch progress</a>
+                )}
+              </p>
+            </>
+          );
+        })()}
       </section>
-      {frozen.length > 0 && (
-        <section className="r2ac-card" style={{ marginTop: 12 }}>
-          <h3>Verified rows (frozen)</h3>
-          <ul style={{ margin: 0, paddingLeft: 18 }}>
-            {frozen.map((r) => (
-              <li key={r.video_hash}>
-                <small><code>{r.video_hash.slice(0, 12)}…</code> {r.url} ({r.vision})</small>{" "}
-                <Form method="post" action="/api/release" style={{ display: "inline" }}>
-                  <input type="hidden" name="shop" value={scanShop} />
-                  <input type="hidden" name="video_hash" value={r.video_hash} />
-                  <button type="submit">Release</button>
-                </Form>
-              </li>
-            ))}
-          </ul>
-          <Form method="post" action="/api/release" style={{ marginTop: 8 }}>
-            <input type="hidden" name="shop" value={scanShop} />
-            <input type="hidden" name="all" value="1" />
-            <button type="submit">Release all</button>
-          </Form>
-        </section>
-      )}
       <section className="r2ac-card" style={{ marginTop: 12 }}>
         <h3>Store readiness (webMCP)</h3>
         {readiness.length === 0 ? (
