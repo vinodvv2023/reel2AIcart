@@ -133,6 +133,8 @@ npm run build
 
 ### 7. Verify
 
+Test storefront: [reel2aicart-test.myshopify.com](https://reel2aicart-test.myshopify.com) — password-gated, password is `ChangeMe!`. The dashboard home also has a **View storefront** link (derived from the installed shop) for one-click access.
+
 1. Open the embedded app in store admin → dashboard shows pipeline health.
 2. Save a product → Recent webhook deliveries shows `forwarded`; Enrichment outcomes goes `sent → enriched`.
 3. `Scan existing catalog` backfills without touching verified rows.

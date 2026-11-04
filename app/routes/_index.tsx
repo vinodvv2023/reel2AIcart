@@ -109,7 +109,13 @@ export default function Home() {
           <a className="btn btn-ghost" href={`/auth/login?shop=${encodeURIComponent(shop)}`} target="_top">Reconnect store</a>
         ) : (
           <small>Open this page from Apps in your store admin to enable reconnect.</small>
+        )}{" "}
+        {scanShop && (
+          <a className="btn btn-ghost" href={`https://${scanShop}`} target="_blank" rel="noreferrer">View storefront</a>
         )}
+      </p>
+      <p>
+        <small>Test storefront is password-gated — password: <code>ChangeMe!</code></small>
       </p>
       <section className="r2ac-card" style={{ marginTop: 12 }}>
         <h3>Catalog scan</h3>
