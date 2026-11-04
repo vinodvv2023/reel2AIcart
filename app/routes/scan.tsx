@@ -71,7 +71,7 @@ export default function Scan() {
           <p className="r2ac-err"><small>Scan stopped with an error: {job.error} Try again from the dashboard.</small></p>
         )}
         <p><a className="btn btn-ghost" href={shop ? `/?shop=${encodeURIComponent(shop)}` : "/"}>Back to dashboard</a></p>
-        <p><small>Vision quality across all rows: {muse} with Muse vision, {heur} heuristic fallback{muse + heur === 0 ? " (no rows yet)" : ""}.</small></p>
+        <p><small>Vision quality across all rows: {muse} analyzed in detail, {heur} basic info only{muse + heur === 0 ? " (no rows yet)" : ""}.</small></p>
       </section>
       {frozen.length > 0 && (
         <section className="r2ac-card" style={{ marginTop: 12 }}>
