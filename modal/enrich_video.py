@@ -48,7 +48,8 @@ def enrich_video(video_url: str, hero_images: list[str], shop: str = "", product
     cur.execute(
         "INSERT INTO video_embeddings (id, video_hash, embedding, summary, pdp_url) VALUES (%s,%s,%s::vector,%s,%s)"
         " ON CONFLICT (video_hash) DO UPDATE SET embedding = EXCLUDED.embedding,"
-        " summary = EXCLUDED.summary, pdp_url = EXCLUDED.pdp_url",
+        " summary = EXCLUDED.summary, pdp_url = EXCLUDED.pdp_url"
+        " WHERE video_embeddings.verified IS DISTINCT FROM TRUE",
         (video_hash, video_hash, vec, psycopg2.extras.Json(summary), summary["pdp_url"]),
     )
     cur.execute(

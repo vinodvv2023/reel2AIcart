@@ -60,6 +60,21 @@ export async function action({ request }: ActionFunctionArgs) {
     }
     const productId =
       typeof payload.product_id === "number" ? payload.product_id : null;
+    // HITL frozen copies: a verified row never re-enriches without Release.
+    // Unverified rows still refresh on re-save (PDP backfill path).
+    if (productId !== null) {
+      try {
+        const sql = db();
+        const rows = (await sql`SELECT verified FROM video_embeddings
+          WHERE summary->>'product_id' = ${String(productId)} LIMIT 1`) as { verified: boolean }[];
+        if (rows.length && rows[0].verified) {
+          await record({ shop, topic, product_id: productId, status: "held-verified", detail: "frozen copy kept" });
+          return json({ ok: true, topic, enqueued: false });
+        }
+      } catch {
+        // check failed open: forward rather than drop the event
+      }
+    }
     if (!process.env.MODAL_WEBHOOK_URL) {
       await record({ shop, topic, product_id: productId, status: "failed", detail: "MODAL_WEBHOOK_URL missing" });
       return json({ ok: true, topic, enqueued: false });
