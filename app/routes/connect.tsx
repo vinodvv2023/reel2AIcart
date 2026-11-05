@@ -445,7 +445,10 @@ export default function Connect() {
   const exportResult = result?.intent === "export" ? result : null;
   const exportKept = keepResult?.ok ? { style: genStyle, outputUrl: keepResult.outputUrl } : genHistory.find((h) => h.style === genStyle);
   const hasStyleHistory = genStyle ? genHistory.some((h) => h.style === genStyle) : false;
-  const keep = { q, rq, product: productId, variant: variantId, reel: reelId, style: genStyle };
+  // keep carries page state (pg/rpg) so picks, styles and variants never kick
+  // the user back to page 1 (refs #10 follow-up). Pagers override pg/rpg
+  // explicitly; fresh searches omit them via the search forms and reset to 1.
+  const keep = { q, rq, product: productId, variant: variantId, reel: reelId, style: genStyle, pg: String(page), rpg: String(rPage) };
   const complete = Boolean(selReel && selVariant);
   return (
     <main className="r2ac-wrap">
@@ -557,7 +560,7 @@ export default function Connect() {
                 // Picking a product resets the style (refs #10 follow-up): a fresh
                 // pick starts with no style selected; `style: ""` drops the param.
                 return (
-                  <a key={p.id} href={qs({ ...keep, product: String(p.id), variant: "", style: "", pg: "1" }) + (p.variants.length > 1 ? "#pick" : "")}
+                  <a key={p.id} href={qs({ ...keep, product: String(p.id), variant: "", style: "" }) + (p.variants.length > 1 ? "#pick" : "")}
                     aria-current={on || undefined}
                     className={`r2ac-row ${i % 2 ? "r2ac-b" : "r2ac-a"}`}
                     style={{ textDecoration: "none", color: "inherit", border: on ? "2px solid #0f4c4a" : "2px solid transparent" }}>
