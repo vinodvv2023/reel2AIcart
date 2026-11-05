@@ -46,6 +46,21 @@ describe("image service contract", () => {
     assert.doesNotMatch(textOnly, /different from the reference/);
   });
 
+  it("flat-lay defaults to wrinkle-free, opt-out shows natural wrinkles", () => {
+    assert.match(
+      buildImagePrompt({ title: "Gown", style: "flat-lay" }).prompt,
+      /wrinkle-free/,
+    );
+    const off = buildImagePrompt({ title: "Gown", style: "flat-lay", wrinkleFree: false }).prompt;
+    assert.doesNotMatch(off, /wrinkle-free/);
+    assert.match(off, /natural fabric.*slight wrinkles/i);
+  });
+
+  it("wrinkleFree is ignored outside flat-lay", () => {
+    const p = buildImagePrompt({ title: "Gown", style: "ghost-mannequin", wrinkleFree: false }).prompt;
+    assert.doesNotMatch(p, /wrinkle|pressed/i);
+  });
+
   it("uses with-image mode with a reference photo, text-only without", () => {
     assert.equal(
       buildImagePrompt({ title: "Gown", style: "flat-lay", referenceImageUrl: "https://cdn/x.jpg" }).sourceMode,

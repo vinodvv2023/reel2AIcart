@@ -26,11 +26,19 @@ const STYLE_SCENES: Record<ImageStyle, string> = {
 };
 export function buildImagePrompt(input: {
   title: string; variantTitle?: string; referenceImageUrl?: string; style: ImageStyle;
+  wrinkleFree?: boolean;
 }): { prompt: string; sourceMode: SourceMode } {
   const scene = STYLE_SCENES[input.style];
   if (!scene) throw new Error(`unknown style: ${String(input.style)}`);
   const variant = input.variantTitle?.trim() ? `, variant ${input.variantTitle.trim()}` : "";
   const hasRef = Boolean(input.referenceImageUrl?.trim());
+  // Flat-lay finish toggle (default on): explicit fabric finish either way so
+  // the choice is visible in the prompt, not silently defaulted.
+  const finish = input.style === "flat-lay"
+    ? (input.wrinkleFree ?? true)
+      ? ` Smooth, wrinkle-free fabric, freshly pressed and pristine.`
+      : ` Natural fabric with realistic texture and slight wrinkles.`
+    : ``;
   // On-actor must not mirror the reference pose (refs #10 follow-up).
   const pose = hasRef && input.style === "on-actor"
     ? ` Use a fresh pose clearly different from the reference photo.`
@@ -39,7 +47,7 @@ export function buildImagePrompt(input: {
     ? ` Match the color, print, and details of the reference product photo.${pose}`
     : ` No reference photo available; interpret freely from the product name.`;
   return {
-    prompt: `Product photo of ${input.title.trim()}${variant}: ${scene}.${ref}`,
+    prompt: `Product photo of ${input.title.trim()}${variant}: ${scene}.${finish}${ref}`,
     sourceMode: hasRef ? "with-image" : "text-only",
   };
 }
@@ -59,6 +67,7 @@ export type ImageEndpoint = "generations" | "edits";
 // added by generateImage and never part of the displayable payload.
 export function buildImageRequest(input: {
   title: string; variantTitle?: string; referenceImageUrl?: string; style: ImageStyle;
+  wrinkleFree?: boolean;
 }): {
   url: string; endpoint: ImageEndpoint; model: string; body: Record<string, unknown>;
   prompt: string; sourceMode: SourceMode; referenceAttached: boolean;
@@ -86,7 +95,7 @@ export type GeneratedImageRecord = {
 export type GenerateSuccess = {
   ok: true; outputUrl: string; sourceMode: SourceMode; prompt: string;
   endpoint: ImageEndpoint; model: string; referenceAttached: boolean;
-  requestBody: Record<string, unknown>;
+  requestBody: Record<string, unknown>; wrinkleFree: boolean;
 };
 export type GenerateError = { code: ImageErrorCode; message: string; detail?: string };
 export type GenerateFailure = { ok: false; error: GenerateError };
@@ -111,7 +120,7 @@ export function providerErrorDetail(body: string): string {
 export async function generateImage(input: {
   shop: string; productId: string; variantId?: string; title: string;
   variantTitle?: string; referenceImageUrl?: string; style: ImageStyle; timeoutMs?: number;
-  persist?: (r: GeneratedImageRecord) => Promise<unknown>;
+  wrinkleFree?: boolean; persist?: (r: GeneratedImageRecord) => Promise<unknown>;
 }): Promise<GenerateSuccess | GenerateFailure> {
   const key = process.env.MODEL_API_KEY ?? "";
   if (!key) return { ok: false, error: { code: "no-keys", message: "MODEL_API_KEY missing in Vercel env - add it to enable image generation." } };
@@ -156,7 +165,7 @@ export async function generateImage(input: {
     return {
       ok: true, outputUrl, sourceMode: req.sourceMode, prompt: req.prompt,
       endpoint: req.endpoint, model: req.model, referenceAttached: req.referenceAttached,
-      requestBody: req.body,
+      requestBody: req.body, wrinkleFree: input.style === "flat-lay" ? (input.wrinkleFree ?? true) : false,
     };
   } catch (e) {
     if (e instanceof DOMException && e.name === "AbortError" || (e as Error)?.name === "AbortError")
