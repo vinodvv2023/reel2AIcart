@@ -56,6 +56,7 @@ function loadTs(rel) {
 
 export const loadService = () => loadTs("app/lib/image/generate.ts");
 export const loadConnectAction = () => loadTs("app/routes/connect.tsx").action;
+export const loadConnectLoader = () => loadTs("app/routes/connect.tsx").loader;
 
 // Fake Neon `sql` tag: answers the exact queries generate/keep issue.
 export function makeDb() {
@@ -63,21 +64,33 @@ export function makeDb() {
   const tag = async (strings, ...values) => {
     const q = strings.join("?");
     if (q.includes("FROM shops")) return [{ shop: state.shop, access_token: "tok" }];
-    if (q.includes("FROM generated_images")) {
-      const [shop, productId, variantId, style, outputUrl] = values;
-      return state.generated
-        .filter((r) => r.shop === shop && r.product_id === productId && r.variant_id === variantId
-          && r.style === style && r.output_url === outputUrl)
-        .map((r) => ({ id: r.id }));
-    }
+    if (q.includes("FROM tag_events")) return [];
     if (q.includes("INSERT INTO generated_images")) {
-      // Literals 'v1' / 'muse-image-1.0' are inline: 6 interpolations only.
-      const [shop, productId, variantId, style, sourceMode, outputUrl] = values;
+      // Canonical audit constants interpolated: 8 values.
+      const [shop, productId, variantId, style, promptVersion, sourceMode, provider, outputUrl] = values;
       state.generated.push({
         id: state.generated.length + 1, shop, product_id: productId,
-        variant_id: variantId, style, source_mode: sourceMode, output_url: outputUrl,
+        variant_id: variantId, style, prompt_version: promptVersion,
+        source_mode: sourceMode, provider, output_url: outputUrl,
       });
       return [];
+    }
+    if (q.includes("FROM generated_images")) {
+      if (q.includes("variant_id")) {
+        const [shop, productId, variantId, style, outputUrl] = values;
+        return state.generated
+          .filter((r) => r.shop === shop && r.product_id === productId && r.variant_id === variantId
+            && r.style === style && r.output_url === outputUrl)
+          .map((r) => ({ id: r.id }));
+      }
+      // Loader history: shop-scoped (shop, product_id).
+      const [shop, productId] = values;
+      return state.generated
+        .filter((r) => r.shop === shop && r.product_id === productId)
+        .map((r) => ({
+          id: r.id, style: r.style, source_mode: r.source_mode,
+          output_url: r.output_url, created_at: "2026-11-05 10:00:00",
+        }));
     }
     if (q.includes("INSERT INTO tag_events")) return [];
     throw new Error("unexpected query: " + q.slice(0, 80));

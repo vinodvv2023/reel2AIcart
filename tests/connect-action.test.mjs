@@ -1,7 +1,7 @@
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import {
-  loadConnectAction, dbStubHolder, makeDb, postForm, withFetch, jsonBody,
+  loadConnectAction, loadConnectLoader, loadService, dbStubHolder, makeDb, postForm, withFetch, jsonBody,
 } from "./helpers/route-harness.mjs";
 
 // Route under test: the REAL app/routes/connect.tsx action (T3/T6, refs #3/#7).
@@ -69,6 +69,22 @@ describe("connect generate intent", () => {
     });
   });
 
+  it("provider 4xx surfaces as 400, not 502", async () => {
+    await withFetch(() => new Response("bad request", { status: 400 }), async () => {
+      const { status, body } = await act(GEN);
+      assert.equal(status, 400);
+      assert.match(body.error, /rejected by the provider/i);
+    });
+  });
+
+  it("spaced 'content filter' wording classifies as content-filter", async () => {
+    await withFetch(() => new Response("rejected by content filter policy", { status: 400 }), async () => {
+      const { status, body } = await act(GEN);
+      assert.equal(status, 502);
+      assert.match(body.error, /content filter/i);
+    });
+  });
+
   it("missing keys surfaces as 500 without touching the network", async () => {
     delete process.env.MODEL_API_KEY;
     await withFetch(() => { throw new Error("must not fetch"); }, async () => {
@@ -116,5 +132,40 @@ describe("connect keep intent", () => {
     const { status, body } = await act(KEEP);
     assert.equal(status, 500);
     assert.match(body.error, /Could not save/);
+  });
+
+  it("keep audit row uses the canonical prompt-version and provider constants", async () => {
+    const { PROMPT_VERSION, IMAGE_PROVIDER } = loadService();
+    await withFetch(() => jsonBody({ data: [{ url: "https://cdn/gen.jpg" }] }), async () => {
+      const kept = await act(KEEP);
+      assert.equal(kept.body.ok, true);
+      const [row] = dbStubHolder.current.state.generated;
+      assert.equal(row.prompt_version, PROMPT_VERSION);
+      assert.equal(row.provider, IMAGE_PROVIDER);
+    });
+  });
+});
+
+describe("connect loader history", () => {
+  const loader = loadConnectLoader();
+  const shopFetch = (url) => {
+    if (String(url).includes("graph.facebook.com")) return jsonBody({ data: [] });
+    if (String(url).includes("/admin/api/")) return jsonBody({ products: [] });
+    throw new Error("unexpected fetch: " + url);
+  };
+
+  it("history is scoped to the current shop", async () => {
+    dbStubHolder.current = makeDb();
+    dbStubHolder.current.state.shop = "shop-a.myshopify.com";
+    dbStubHolder.current.state.generated.push(
+      { id: 1, shop: "shop-a.myshopify.com", product_id: "42", variant_id: "7", style: "flat-lay", prompt_version: "v1", source_mode: "with-image", provider: "muse-image-1.0", output_url: "https://cdn/a.jpg" },
+      { id: 2, shop: "shop-b.myshopify.com", product_id: "42", variant_id: "7", style: "flat-lay", prompt_version: "v1", source_mode: "with-image", provider: "muse-image-1.0", output_url: "https://cdn/b.jpg" },
+    );
+    await withFetch(shopFetch, async () => {
+      const res = await loader({ request: new Request("http://test/connect?product=42"), params: {}, context: {} });
+      const body = await res.json();
+      assert.equal(body.genHistory.length, 1);
+      assert.equal(body.genHistory[0].outputUrl, "https://cdn/a.jpg");
+    });
   });
 });
