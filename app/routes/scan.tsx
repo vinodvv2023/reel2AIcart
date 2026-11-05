@@ -11,7 +11,7 @@ export const meta: MetaFunction<typeof loader> = ({ data }) => {
   return open ? [{ "http-equiv": "refresh", content: "30" }] : [];
 };
 
-type ScanJob = { id: number; shop: string; status: string; scanned: number; enqueued: number; skipped_verified: number; error: string };
+type ScanJob = { id: number; shop: string; status: string; scanned: number; enqueued: number; skipped_verified: number; error: string; created_at: string; wait_min: number };
 
 export async function loader({ request }: LoaderFunctionArgs) {
   const shop = new URL(request.url).searchParams.get("shop") ?? "";
@@ -22,14 +22,17 @@ export async function loader({ request }: LoaderFunctionArgs) {
     const sql = db();
     const [rows, fz, qy] = await Promise.all([
       (async () => (await (shop
-        ? sql`SELECT id, shop, status, scanned, enqueued, skipped_verified, error FROM scan_jobs WHERE shop = ${shop} ORDER BY id DESC LIMIT 1`
-        : sql`SELECT id, shop, status, scanned, enqueued, skipped_verified, error FROM scan_jobs ORDER BY id DESC LIMIT 1`)) as ScanJob[])(),
+        ? sql`SELECT id, shop, status, scanned, enqueued, skipped_verified, error, created_at::text AS created_at FROM scan_jobs WHERE shop = ${shop} ORDER BY id DESC LIMIT 1`
+        : sql`SELECT id, shop, status, scanned, enqueued, skipped_verified, error, created_at::text AS created_at FROM scan_jobs ORDER BY id DESC LIMIT 1`)) as ScanJob[])(),
       sql`SELECT video_hash, summary->>'video_url' AS url, summary->'providers'->>'vision' AS vision
         FROM video_embeddings WHERE verified ORDER BY video_hash LIMIT 50`,
       sql`SELECT summary->'providers'->>'vision' AS v, COUNT(*)::int AS n
         FROM video_embeddings GROUP BY 1`,
     ]);
     job = rows[0] ?? null;
+    if (job && (job.status === "queued" || job.status === "running")) {
+      job.wait_min = Math.max(0, Math.floor((Date.now() - new Date(job.created_at).getTime()) / 60000));
+    }
     frozen = fz as typeof frozen;
     quality = qy as typeof quality;
   } catch {
@@ -56,7 +59,11 @@ export default function Scan() {
         {!job ? (
           <p><small>No scans yet.</small></p>
         ) : open ? (
-          <p><small>Scan in progress (this page refreshes itself) — checked {job.scanned} items so far, {job.enqueued} sent for image and video analysis{job.skipped_verified > 0 ? `, ${job.skipped_verified} need your review below` : ""}.</small></p>
+          job.scanned === 0 && job.enqueued === 0 ? (
+            <p><small>Scan queued - waiting for the background worker's next pass (every few minutes). 0 checked so far means no pass has run yet, not that your catalog is empty - this page refreshes itself and the numbers appear once the pass starts.{job.wait_min >= 10 ? ` Queued ${job.wait_min} min ago, longer than usual - the worker may need a nudge.` : ""}</small></p>
+          ) : (
+            <p><small>Scan in progress (this page refreshes itself) - checked {job.scanned} items so far, {job.enqueued} sent for image and video analysis{job.skipped_verified > 0 ? `, ${job.skipped_verified} need your review below` : ""}.</small></p>
+          )
         ) : job.status === "done" ? (
           <>
             <p className="r2ac-ok"><small>Scan complete. All done — nothing left for you to do{job.skipped_verified > 0 ? " except the review items below" : ""}.</small></p>

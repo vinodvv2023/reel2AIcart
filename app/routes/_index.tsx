@@ -151,7 +151,11 @@ export default function Home() {
           return (
             <>
               {job && open ? (
-                <p><small>Scan in progress — {job.scanned} checked, {job.enqueued} being analyzed.</small></p>
+                job.scanned === 0 && job.enqueued === 0 ? (
+                  <p><small>Scan queued - waiting for the background worker's next pass (0 checked so far means no pass has run yet).</small></p>
+                ) : (
+                  <p><small>Scan in progress - {job.scanned} checked, {job.enqueued} being analyzed.</small></p>
+                )
               ) : job && job.status === "done" ? (
                 <p className="r2ac-ok"><small>Scan complete — {job.scanned} checked, {job.enqueued} analyzed{job.skipped_verified > 0 ? `, ${job.skipped_verified} need review` : ""}.</small></p>
               ) : job && job.status === "failed" ? (
