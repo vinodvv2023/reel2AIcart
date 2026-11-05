@@ -44,11 +44,17 @@ export async function loader({ request }: LoaderFunctionArgs) {
       held = 0,
       failed = 0;
     for (const p of products) {
-      const seen = (await sql`SELECT verified FROM video_embeddings
-        WHERE summary->>'product_id' = ${String(p.id)} LIMIT 1`) as { verified: boolean }[];
+      const seen = (await sql`SELECT verified, summary->>'text_seed' AS seed FROM video_embeddings
+        WHERE summary->>'product_id' = ${String(p.id)} LIMIT 1`) as { verified: boolean; seed: string | null }[];
       if (seen.length) {
-        if (seen[0].verified) held++;
-        continue;
+        if (seen[0].verified) {
+          held++;
+          continue;
+        }
+        // Junk rows (enrichment never landed: bare media URL, "no image"
+        // filler, empty seed) are NOT done — fall through and re-enqueue.
+        const seed = String(seen[0].seed ?? "");
+        if (seed && !seed.startsWith("http") && !seed.toLowerCase().includes("no image")) continue;
       }
       const jobKey = `${job.shop}:${p.id}:scan:${job.id}:${Date.now()}`;
       try {

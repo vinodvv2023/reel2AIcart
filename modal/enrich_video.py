@@ -79,11 +79,17 @@ def _report(callback_url: str, secret: str, job_key: str, status: str, detail: s
     try:
         import httpx
 
-        httpx.post(
+        resp = httpx.post(
             callback_url,
             json={"job_key": job_key, "status": status, "detail": detail[:300], "secret": secret},
             timeout=15,
         )
+        try:
+            body = resp.json()
+        except Exception:
+            body = {}
+        if resp.status_code != 200 or not body.get("ok", True):
+            print(f"[DEBUG-report] callback rejected job={job_key}: http={resp.status_code} body={resp.text[:200]}")
     except Exception as exc:
         print(f"[report] callback failed job={job_key}: {exc}")
 
@@ -167,7 +173,9 @@ def _vision_muse(video_url: str, hero_images: list[str]) -> dict | None:
 def _parse_vision(r) -> dict | None:
     """Extract the products/scene JSON from a chat completion response."""
     import json
+    import re
 
+    content = ""
     try:
         msg = r.json()["choices"][0]["message"]
         content = msg.get("content") or msg.get("reasoning_content") or ""
@@ -175,12 +183,21 @@ def _parse_vision(r) -> dict | None:
             content = "".join(
                 p.get("text", "") for p in content if isinstance(p, dict) and p.get("type") == "text"
             )
-        data = json.loads(content[content.index("{"): content.rindex("}") + 1])
+        raw = content[content.index("{"): content.rindex("}") + 1]
+        try:
+            data = json.loads(raw)
+        except Exception:
+            # Model emits near-JSON (trailing commas, stray control chars):
+            # repair once before giving up.
+            repaired = re.sub(r",\s*([}\]])", r"\1", raw)
+            repaired = re.sub(r"[\x00-\x1f]", " ", repaired)
+            data = json.loads(repaired)
         if not isinstance(data.get("products"), list):
             raise ValueError("no products[] in response")
         return data
     except Exception as exc:
         print(f"[vision:muse] parse failed: {str(exc)[:150]}")
+        print(f"[DEBUG-vision] raw payload: {str(content)[:500]}")
         return None
 
 
