@@ -54,6 +54,18 @@ describe("connect generate intent", () => {
     }, { calls: 1 });
   });
 
+  it("flat-lay honors the wrinkle-free checkbox (unchecked = natural wrinkles)", async () => {
+    await withFetch(() => jsonBody({ data: [{ b64_json: "QUJD" }] }), async () => {
+      const on = await act({ ...GEN, wrinkleFree: "yes" });
+      assert.match(on.body.prompt, /wrinkle-free/);
+      assert.equal(on.body.wrinkleFree, true);
+      const off = await act(GEN);
+      assert.doesNotMatch(off.body.prompt, /wrinkle-free/);
+      assert.match(off.body.prompt, /slight wrinkles/);
+      assert.equal(off.body.wrinkleFree, false);
+    });
+  });
+
   it("generate without a reference posts to generations with no images field", async () => {
     await withFetch(() => jsonBody({ data: [{ url: "https://cdn/gen.jpg" }] }), async (calls) => {
       const { status, body } = await act({ ...GEN, referenceImageUrl: "" });
@@ -261,6 +273,7 @@ describe("connect loader prompt preview", () => {
       assert.equal(body.promptPreview.endpoint, "edits");
       assert.equal(body.promptPreview.referenceAttached, true);
       assert.deepEqual(body.promptPreview.requestBody.images, [{ image_url: "https://cdn/x.jpg" }]);
+      assert.match(body.promptPreview.prompt, /wrinkle-free/);
     });
   });
 

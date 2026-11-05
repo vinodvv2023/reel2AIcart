@@ -130,6 +130,9 @@ export async function loader({ request }: LoaderFunctionArgs) {
     const req = buildImageRequest({
       title: selProduct.title, variantTitle: selVariant?.title ?? "",
       referenceImageUrl: selProduct.image ?? "", style: genStyle,
+      // Preview assumes the default (wrinkle-free on); unchecking before
+      // generating changes the actual prompt, shown post-generation.
+      wrinkleFree: true,
     });
     return {
       prompt: req.prompt, endpoint: req.endpoint, model: req.model,
@@ -212,7 +215,7 @@ function toGenResponse(res: GenerateSuccess | GenerateFailure) {
     intent: "generate" as const, ok: true as const, outputUrl: res.outputUrl,
     sourceMode: res.sourceMode, prompt: res.prompt, endpoint: res.endpoint,
     model: res.model, referenceAttached: res.referenceAttached,
-    requestBody: res.requestBody,
+    requestBody: res.requestBody, wrinkleFree: res.wrinkleFree,
   });
 }
 async function logGeneration(e: { shop: string; productId: string; variantId: string; style: string; outcome: "ok" | "failed"; cause: string }) {
@@ -238,6 +241,9 @@ async function generateAction(form: FormData) {
   const title = String(form.get("productTitle") ?? "").trim() || `Product ${productId}`;
   const variantTitle = String(form.get("variantTitle") ?? "").trim();
   const referenceImageUrl = String(form.get("referenceImageUrl") ?? "").trim();
+  // Flat-lay finish toggle: checked checkbox posts "yes"; unchecked posts
+  // nothing. Only meaningful for flat-lay — the service ignores it otherwise.
+  const wrinkleFree = String(form.get("wrinkleFree") ?? "") === "yes";
   let shop = "";
   try {
     const sql = db();
@@ -254,7 +260,7 @@ async function generateAction(form: FormData) {
   const shared = inflightGen.get(dedupeKey);
   if (shared) return toGenResponse(await shared);
   const run = generateImage({
-    shop, productId, variantId, title, variantTitle, referenceImageUrl, style,
+    shop, productId, variantId, title, variantTitle, referenceImageUrl, style, wrinkleFree,
   });
   inflightGen.set(dedupeKey, run);
   try {
@@ -633,6 +639,15 @@ export default function Connect() {
               <input type="hidden" name="productTitle" value={selProduct.title} />
               <input type="hidden" name="variantTitle" value={selVariant?.title ?? ""} />
               <input type="hidden" name="referenceImageUrl" value={selProduct.image ?? ""} />
+              {genStyle === "flat-lay" && (
+                <p style={{ margin: "8px 0 0" }}>
+                  <label>
+                    <input type="checkbox" name="wrinkleFree" value="yes"
+                      defaultChecked={genResult?.ok ? genResult.wrinkleFree : true} />{" "}
+                    <small>Wrinkle free</small>
+                  </label>
+                </p>
+              )}
               <button type="submit" className="btn btn-primary" disabled={!genStyle || nav.state !== "idle"}>
                 {nav.state !== "idle" ? "Generating…" : genResult?.ok || hasStyleHistory ? "Regenerate image" : "Generate image"}
               </button>
