@@ -83,9 +83,12 @@ export async function callTool(
       }
       return added;
     };
-    // Text-match boost: rows whose summary literally contains the query rank
-    // above pure-vector neighbours. Short queries ("sari") sit in a weak
-    // cosine regime where unrelated summaries outrank real matches.
+    // Text-match boost: rows whose summary — or product URL slug, which carries
+    // the merchant's own title words ("...-silk-saree-in-zari-jacquard") —
+    // literally contain the query rank above pure-vector neighbours. Short
+    // queries ("sari") sit in a weak cosine regime where unrelated summaries
+    // outrank real matches, and vision summaries often omit the garment noun
+    // ("yellow attire" instead of "yellow saree").
     const like = "%" + q + "%";
     const modes: string[] = [];
     const bge = q ? await bgeQuery(q) : null;
@@ -95,7 +98,7 @@ export async function callTool(
           SELECT id, summary, pdp_url, (embedding <=> ${bge}::vector) AS score
           FROM video_embeddings WHERE summary->>'providers' IS NOT NULL
             AND summary->'providers'->>'embed' = 'deepinfra-bge-v1'
-          ORDER BY (CASE WHEN summary::text ILIKE ${like} THEN 0 ELSE 1 END), embedding <=> ${bge}::vector LIMIT 20`;
+          ORDER BY (CASE WHEN summary::text ILIKE ${like} OR pdp_url ILIKE ${like} THEN 0 ELSE 1 END), embedding <=> ${bge}::vector LIMIT 20`;
         if (take(ranked)) modes.push("cosine-bge-v1");
       } catch {
         // fall through
@@ -107,7 +110,7 @@ export async function callTool(
         const ranked = await sql`
           SELECT id, summary, pdp_url, (embedding <=> ${vec}::vector) AS score
           FROM video_embeddings WHERE embedding IS NOT NULL
-          ORDER BY (CASE WHEN summary::text ILIKE ${like} THEN 0 ELSE 1 END), embedding <=> ${vec}::vector LIMIT 20`;
+          ORDER BY (CASE WHEN summary::text ILIKE ${like} OR pdp_url ILIKE ${like} THEN 0 ELSE 1 END), embedding <=> ${vec}::vector LIMIT 20`;
         if (take(ranked)) modes.push("cosine-v1");
       } catch {
         // fall through

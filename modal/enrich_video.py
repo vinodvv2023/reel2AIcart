@@ -128,7 +128,8 @@ def _vision_muse(video_url: str, hero_images: list[str]) -> dict | None:
         print("[vision:muse] missing MODEL_API_KEY/META_BASE_URL/MUSE_VISION_MODEL")
         return None
     prompt = ("List each distinct product visible. Respond ONLY with JSON: "
-              '{"products": [{"sku_hint": "short name", "detail": "color/material in 6 words"}], "scene": "one line"}.')
+              '{"products": [{"sku_hint": "garment name, e.g. pink silk saree", "detail": "garment + color/material in 8 words"}], "scene": "one line"}. '
+              "Name the garment type in every detail (saree, lehenga, gown, veil, ...), never a bare color/material.")
     if not hero_images and video_url:
         prompt += f" No images provided; video URL for context only: {video_url}."
     imgs = list(hero_images or [])[:3]
@@ -193,7 +194,7 @@ def _contract_from_muse(video_url: str, hero_images: list[str], shop: str, produ
         {"t": t, "sku_hint": str(p.get("sku_hint", f"look-{i + 1}")), "pdp_url": ""}
         for i, (t, p) in enumerate(zip(marks, products or [{}]))
     ]
-    seed = f"{parsed.get('scene', '')} {' '.join(str(p.get('detail', '')) for p in products)}".strip()
+    seed = f"{parsed.get('scene', '')} {' '.join(str(p.get('sku_hint', '')) for p in products)} {' '.join(str(p.get('detail', '')) for p in products)}".strip()
     return {
         "video_url": video_url,
         "hero_images": (hero_images or [])[:3],
