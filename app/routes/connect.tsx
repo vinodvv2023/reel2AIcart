@@ -122,6 +122,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
   }
   return json({
     hint: humanizeCommerceError("{{IE_30010}}"),
+    origin: new URL(request.url).origin,
     ig: Boolean(process.env.META_GRAPH_TOKEN && process.env.IG_USER_ID),
     reels: matchedReels.slice((rPage - 1) * PER_PAGE, rPage * PER_PAGE),
     reelsError,
@@ -152,6 +153,7 @@ export async function action({ request }: ActionFunctionArgs) {
   const intent = String(form.get("intent") ?? "tag");
   if (intent === "generate") return generateAction(form);
   if (intent === "keep") return keepAction(form);
+  if (intent === "export") return exportAction(form);
   const mediaId = String(form.get("mediaId") ?? "").trim();
   const variantId = String(form.get("variantId") ?? "").trim();
   if (!mediaId || !variantId)
@@ -267,6 +269,65 @@ async function keepAction(form: FormData) {
   }
 }
 
+// T5 (refs #2): second explicit POST — uploads the kept image to Shopify
+// Files behind a server-validated confirm checkbox. Never automatic, never
+// touches the live product image; reports the Files URL inline.
+async function exportAction(form: FormData) {
+  const productId = String(form.get("productId") ?? "").trim();
+  const style = String(form.get("style") ?? "").trim();
+  const outputUrl = String(form.get("outputUrl") ?? "").trim();
+  const title = String(form.get("productTitle") ?? "").trim() || `Product ${productId}`;
+  if (String(form.get("confirm") ?? "") !== "yes")
+    return json({ intent: "export" as const, ok: false as const, error: "Tick the confirmation box to push a copy to Shopify Files." }, { status: 400 });
+  if (!productId || !isGenStyle(style) || !outputUrl)
+    return json({ intent: "export" as const, ok: false as const, error: "Nothing to export — keep an image first." }, { status: 400 });
+  if (outputUrl.length > 4000)
+    return json({ intent: "export" as const, ok: false as const, error: "Kept image looks invalid — regenerate instead." }, { status: 400 });
+  try {
+    const sql = db();
+    const shops = (await sql`SELECT shop, access_token FROM shops LIMIT 1`) as { shop: string; access_token: string }[];
+    if (!shops.length)
+      return json({ intent: "export" as const, ok: false as const, error: "No shop installed yet." }, { status: 500 });
+    const filesUrl = await pushToFiles(shops[0].shop, shops[0].access_token, outputUrl, downloadName(title, style, outputUrl));
+    return json({ intent: "export" as const, ok: true as const, filesUrl });
+  } catch (e) {
+    return json({ intent: "export" as const, ok: false as const, error: e instanceof Error ? e.message : "Files export failed — try again." }, { status: 502 });
+  }
+}
+
+// T5 staged upload then fileCreate — Files only. Reuses the shops-token
+// pattern from shopProducts; no product-image mutation path exists here.
+async function pushToFiles(shop: string, token: string, outputUrl: string, filename: string): Promise<string> {
+  const img = await fetch(outputUrl);
+  if (!img.ok) throw new Error(`Could not fetch the kept image (status ${img.status}) — try again.`);
+  const mime = (img.headers.get("content-type") ?? "").split(";")[0].trim() || "image/png";
+  if (!mime.startsWith("image/")) throw new Error("Kept URL is not an image — regenerate instead.");
+  const bytes = new Uint8Array(await img.arrayBuffer());
+  if (bytes.length > 20_000_000) throw new Error("Image too large for Files (20 MB cap) — regenerate instead.");
+  const gql = `https://${shop}/admin/api/2026-10/graphql.json`;
+  const headers = { "X-Shopify-Access-Token": token, "Content-Type": "application/json" };
+  const staged = (await (await fetch(gql, { method: "POST", headers,
+    body: JSON.stringify({ query: `mutation($input:[StagedUploadInput!]!){stagedUploadsCreate(input:$input){stagedTargets{url resourceUrl parameters{name value}}userErrors{message}}}`,
+      variables: { input: [{ filename, mimeType: mime, resource: "FILE", fileSize: String(bytes.length), httpMethod: "PUT" }] } }),
+  })).json()) as { data?: { stagedUploadsCreate?: { stagedTargets?: { url: string; resourceUrl: string; parameters?: { name: string; value: string }[] }[]; userErrors?: { message: string }[] } } };
+  const target = staged.data?.stagedUploadsCreate?.stagedTargets?.[0];
+  if (!target) throw new Error(staged.data?.stagedUploadsCreate?.userErrors?.[0]?.message
+    ? `Shopify Files refused the upload: ${staged.data.stagedUploadsCreate.userErrors[0].message}` : "Shopify Files refused the upload — try again.");
+  const putHeaders: Record<string, string> = { "Content-Type": mime };
+  for (const p of target.parameters ?? []) putHeaders[p.name] = p.value;
+  const put = await fetch(target.url, { method: "PUT", headers: putHeaders, body: bytes });
+  if (!put.ok) throw new Error(`Shopify Files upload failed (status ${put.status}) — try again.`);
+  const created = (await (await fetch(gql, { method: "POST", headers,
+    body: JSON.stringify({ query: `mutation($files:[FileCreateInput!]!){fileCreate(files:$files){files{... on GenericFile{id url}... on MediaImage{id image{url}}}userErrors{message}}}`,
+      variables: { files: [{ originalSource: target.resourceUrl, contentType: "IMAGE" }] } }),
+  })).json()) as { data?: { fileCreate?: { files?: ({ url?: string; image?: { url?: string } })[]; userErrors?: { message: string }[] } } };
+  const file = created.data?.fileCreate?.files?.[0];
+  const filesUrl = file?.url ?? file?.image?.url;
+  if (!filesUrl) throw new Error(created.data?.fileCreate?.userErrors?.[0]?.message
+    ? `Shopify Files rejected the file: ${created.data.fileCreate.userErrors[0].message}` : "Shopify Files rejected the file — try again.");
+  return filesUrl;
+}
+
 async function logTag(mediaId: string, variantId: string, status: string, detail: string) {
   try {
     const sql = db();
@@ -281,15 +342,35 @@ async function logTag(mediaId: string, variantId: string, status: string, detail
 const qs = (p: Record<string, string>) =>
   `?${Object.entries(p).filter(([, v]) => v).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join("&")}`;
 
+// T5 (refs #2): `{product}-{style}` filename; the persisted output URL is the
+// download source (no extra backend seam). Same-origin anchors download
+// directly; cross-origin degrades to open-in-new-tab (download attr would be
+// ignored cross-origin, so it is omitted there).
+function downloadName(title: string, style: string, url: string): string {
+  const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "product";
+  const ext = (/\.(png|jpe?g|webp|gif|avif)([?#]|$)/i.exec(url)?.[1] ?? "png").toLowerCase().replace("jpeg", "jpg");
+  return `${slug}-${style}.${ext}`;
+}
+function dlProps(url: string, origin: string, name: string): { download?: string; target?: "_blank"; rel?: string } {
+  try {
+    if (new URL(url, origin).origin === origin) return { download: name };
+  } catch {
+    // unparseable URL — fall through to open-in-new-tab
+  }
+  return { target: "_blank", rel: "noreferrer" };
+}
+
 export default function Connect() {
   const { hint, ig, reels, reelsError, rTotal, rPage, rPages, products, productsError, total, page, pages,
-    q, rq, productId, variantId, reelId, genStyle, selReel, selProduct, selVariant, taggedHere, genHistory } =
+    q, rq, productId, variantId, reelId, genStyle, selReel, selProduct, selVariant, taggedHere, genHistory, origin } =
     useLoaderData<typeof loader>();
   const result = useActionData<typeof action>();
   const nav = useNavigation();
   const tagResult = result?.intent === "tag" ? result : null;
   const genResult = result?.intent === "generate" ? result : null;
   const keepResult = result?.intent === "keep" ? result : null;
+  const exportResult = result?.intent === "export" ? result : null;
+  const exportKept = keepResult?.ok ? { style: genStyle, outputUrl: keepResult.outputUrl } : genHistory.find((h) => h.style === genStyle);
   const hasStyleHistory = genStyle ? genHistory.some((h) => h.style === genStyle) : false;
   const keep = { q, rq, product: productId, variant: variantId, reel: reelId, style: genStyle };
   const complete = Boolean(selReel && selVariant);
@@ -485,6 +566,7 @@ export default function Connect() {
                 <img src={genResult.outputUrl} alt={`Generated ${genStyle} image of ${selProduct.title}`}
                   loading="lazy" style={{ maxWidth: "100%", height: "auto", borderRadius: 8 }} />
                 <figcaption><small>{genStyle} · {genResult.sourceMode === "with-image" ? "matched to product photo" : "interpreted from product name"}</small></figcaption>
+                <a className="btn btn-ghost" href={genResult.outputUrl} {...dlProps(genResult.outputUrl, origin, downloadName(selProduct.title, genStyle, genResult.outputUrl))} aria-label={`Download ${genStyle} image of ${selProduct.title}`}>Download</a>
               </figure>
             )}
             {genResult?.ok && !keepResult?.ok && (
@@ -508,6 +590,29 @@ export default function Connect() {
                   : keepResult.error}
               </p>
             )}
+            {exportKept && (
+              <Form method="post" aria-label="Push kept image to Shopify Files" style={{ marginTop: 8 }}>
+                <input type="hidden" name="intent" value="export" />
+                <input type="hidden" name="productId" value={productId} />
+                <input type="hidden" name="style" value={exportKept.style} />
+                <input type="hidden" name="productTitle" value={selProduct.title} />
+                <input type="hidden" name="outputUrl" value={exportKept.outputUrl} />
+                <label style={{ display: "block", marginTop: 4 }}>
+                  <input type="checkbox" name="confirm" value="yes" required />{" "}
+                  <small>Push a copy to Shopify Files (never changes the live product image)</small>
+                </label>
+                <button type="submit" className="btn btn-ghost" disabled={nav.state !== "idle"} style={{ marginTop: 4 }}>
+                  Push to Shopify Files
+                </button>
+              </Form>
+            )}
+            {exportResult && (
+              <p role={exportResult.ok ? "status" : "alert"} className={exportResult.ok ? "r2ac-ok" : "r2ac-err"}>
+                {exportResult.ok
+                  ? <><a href={exportResult.filesUrl} target="_blank" rel="noreferrer">Open in Shopify Files</a> — catalog image untouched.</>
+                  : exportResult.error}
+              </p>
+            )}
             {genHistory.length > 0 && (
               <div style={{ marginTop: 12 }} aria-label="Generated image history">
                 <h3>History <small>(newest first)</small></h3>
@@ -516,6 +621,7 @@ export default function Connect() {
                     <figure key={h.id} role="listitem" style={{ margin: 0, width: 120 }}>
                       <img src={h.outputUrl} alt="" loading="lazy" style={{ width: 120, height: 120, objectFit: "cover", borderRadius: 8 }} />
                       <figcaption><small><strong>{h.style}</strong> · {h.sourceMode} · {h.when}</small></figcaption>
+                      <a className="btn btn-ghost" href={h.outputUrl} {...dlProps(h.outputUrl, origin, downloadName(selProduct.title, h.style, h.outputUrl))} aria-label={`Download ${h.style} image of ${selProduct.title}`}>Download</a>
                     </figure>
                   ))}
                 </div>
