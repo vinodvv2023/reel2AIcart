@@ -31,25 +31,41 @@ async function igMedia(): Promise<{ reels: Reel[]; error: string | null }> {
   }
 }
 
-async function shopProducts(): Promise<{ products: Product[]; error: string | null }> {
+async function shopProducts(): Promise<{ products: Product[]; error: string | null; shopDomain: string }> {
   try {
     const sql = db();
     const shops = (await sql`SELECT shop, access_token FROM shops LIMIT 1`) as {
       shop: string;
       access_token: string;
     }[];
-    if (!shops.length) return { products: [], error: "No shop installed yet." };
+    if (!shops.length) return { products: [], error: "No shop installed yet.", shopDomain: "" };
     const r = await fetch(
       `https://${shops[0].shop}/admin/api/2026-10/products.json?limit=50&fields=id,title,image,variants`,
       { headers: { "X-Shopify-Access-Token": shops[0].access_token } },
     );
-    if (!r.ok) return { products: [], error: `Shopify API ${r.status} - re-authorize the store.` };
+    if (!r.ok) return { products: [], error: `Shopify API ${r.status} - re-authorize the store.`, shopDomain: shops[0].shop };
     const { products } = (await r.json()) as {
       products: (Omit<Product, "image"> & { image?: { src?: string } | null })[];
     };
-    return { products: products.map((p) => ({ ...p, image: p.image?.src })), error: null };
+    return { products: products.map((p) => ({ ...p, image: p.image?.src })), error: null, shopDomain: shops[0].shop };
   } catch {
-    return { products: [], error: "Shopify API unreachable." };
+    return { products: [], error: "Shopify API unreachable.", shopDomain: "" };
+  }
+}
+
+// Instagram profile handle for the "open on Instagram" link (viewers check).
+// Additive: failure hides the link, never breaks the page.
+async function igProfileName(): Promise<string> {
+  const token = process.env.META_GRAPH_TOKEN ?? "";
+  const ig = process.env.IG_USER_ID ?? "";
+  if (!token || !ig) return "";
+  try {
+    const r = await fetch(`https://graph.facebook.com/v19.0/${ig}?fields=username&access_token=${token}`);
+    if (!r.ok) return "";
+    const j = (await r.json()) as { username?: string };
+    return typeof j.username === "string" ? j.username : "";
+  } catch {
+    return "";
   }
 }
 
@@ -64,9 +80,10 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const genStyle = isGenStyle(rawStyle) ? rawStyle : "";
   const pg = Math.max(1, parseInt(params.get("pg") ?? "1", 10) || 1);
   const rpg = Math.max(1, parseInt(params.get("rpg") ?? "1", 10) || 1);
-  const [{ reels, error: reelsError }, { products, error: productsError }] = await Promise.all([
+  const [{ reels, error: reelsError }, { products, error: productsError, shopDomain }, igUsername] = await Promise.all([
     igMedia(),
     shopProducts(),
+    igProfileName(),
   ]);
   const matchedReels = rq
     ? reels.filter(
@@ -165,6 +182,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
     taggedHere,
     genHistory,
     promptPreview,
+    igUsername,
+    shopDomain,
   });
 }
 
@@ -433,7 +452,7 @@ function dlProps(url: string, origin: string, name: string): { download?: string
 
 export default function Connect() {
   const { hint, ig, reels, reelsError, rTotal, rPage, rPages, products, productsError, total, page, pages,
-    q, rq, productId, variantId, reelId, genStyle, selReel, selProduct, selVariant, taggedHere, genHistory, promptPreview, origin } =
+    q, rq, productId, variantId, reelId, genStyle, selReel, selProduct, selVariant, taggedHere, genHistory, promptPreview, igUsername, shopDomain, origin } =
     useLoaderData<typeof loader>();
   const result = useActionData<typeof action>();
   const nav = useNavigation();
@@ -487,6 +506,9 @@ export default function Connect() {
       <div className="r2ac-cols">
         <section className="r2ac-card" aria-label="Instagram reels">
           <h2>1. Pick a reel</h2>
+          {igUsername && (
+            <p><small><a href={`https://www.instagram.com/${igUsername}/`} target="_blank" rel="noreferrer">Open @{igUsername} on Instagram</a> to check the reels</small></p>
+          )}
           {reelsError ? (
             <p role="alert" className="r2ac-err">{reelsError}</p>
           ) : (
@@ -548,6 +570,9 @@ export default function Connect() {
 
         <section className="r2ac-card" aria-label="Shopify products">
           <h2>2. Pick a product</h2>
+          {shopDomain && (
+            <p><small><a href={`https://${shopDomain}`} target="_blank" rel="noreferrer">Open {shopDomain} on Shopify</a> to check the catalog</small></p>
+          )}
           {productsError ? (
             <p role="alert" className="r2ac-err">{productsError}</p>
           ) : (

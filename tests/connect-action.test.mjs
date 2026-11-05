@@ -254,7 +254,15 @@ describe("connect export intent", () => {
 
 describe("connect loader prompt preview", () => {
   const loader = loadConnectLoader();
+  let savedIg;
+  beforeEach(() => {
+    savedIg = { t: process.env.META_GRAPH_TOKEN, id: process.env.IG_USER_ID };
+    process.env.META_GRAPH_TOKEN = "ig-test-token";
+    process.env.IG_USER_ID = "123";
+  });
+  afterEach(() => { process.env.META_GRAPH_TOKEN = savedIg.t; process.env.IG_USER_ID = savedIg.id; });
   const catalogFetch = (url) => {
+    if (String(url).includes("fields=username")) return jsonBody({ username: "teststyle" });
     if (String(url).includes("graph.facebook.com")) return jsonBody({ data: [] });
     if (String(url).includes("/admin/api/")) return jsonBody({ products: [
       { id: 42, title: "Emerald Gown", image: { src: "https://cdn/x.jpg" }, variants: [{ id: 7, title: "M", price: "99" }] },
@@ -274,6 +282,8 @@ describe("connect loader prompt preview", () => {
       assert.equal(body.promptPreview.referenceAttached, true);
       assert.deepEqual(body.promptPreview.requestBody.images, [{ image_url: "https://cdn/x.jpg" }]);
       assert.match(body.promptPreview.prompt, /wrinkle-free/);
+      assert.equal(body.igUsername, "teststyle");
+      assert.equal(body.shopDomain, "test-shop.myshopify.com");
     });
   });
 
