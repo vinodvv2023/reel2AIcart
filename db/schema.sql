@@ -122,7 +122,7 @@ CREATE TABLE IF NOT EXISTS generated_images (
   shop TEXT NOT NULL,
   product_id TEXT NOT NULL,
   variant_id TEXT NOT NULL DEFAULT '',
-  style TEXT NOT NULL CHECK (style IN ('flat-lay','folded-stack','single-folded','ghost-mannequin','hanger','on-actor')),
+  style TEXT NOT NULL CHECK (style IN ('flat-lay','folded-stack','single-stack','ghost-mannequin','hanger','on-actor')),
   prompt_version TEXT NOT NULL DEFAULT 'v1',
   source_mode TEXT NOT NULL CHECK (source_mode IN ('with-image','text-only')),
   provider TEXT NOT NULL DEFAULT 'muse-image-1.0',
