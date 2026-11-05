@@ -67,15 +67,32 @@ export async function callTool(
   const sql = db();
   if (name === "search_products") {
     const q = String(args.query ?? "");
+    // Merge BGE + deterministic rankings: the BGE branch used to early-return,
+    // shadowing rows that only carry deterministic embeddings. Placeholder
+    // summaries (enrichment pending, text_seed is a bare CDN URL) never rank.
+    type Hit = { id: string; summary: { text_seed?: string }; pdp_url: string; score: number };
+    const seen = new Map<string, Hit>();
+    const take = (rows: unknown): boolean => {
+      let added = false;
+      for (const r of rows as Hit[]) {
+        if (!r || seen.has(r.id)) continue;
+        if (String(r.summary?.text_seed ?? "").startsWith("http")) continue;
+        if (typeof r.score !== "number") r.score = Number.POSITIVE_INFINITY;
+        seen.set(r.id, r);
+        added = true;
+      }
+      return added;
+    };
+    const modes: string[] = [];
     const bge = q ? await bgeQuery(q) : null;
     if (bge) {
       try {
-        const ranked = (await sql`
+        const ranked = await sql`
           SELECT id, summary, pdp_url, (embedding <=> ${bge}::vector) AS score
           FROM video_embeddings WHERE summary->>'providers' IS NOT NULL
             AND summary->'providers'->>'embed' = 'deepinfra-bge-v1'
-          ORDER BY embedding <=> ${bge}::vector LIMIT 20`) as unknown[];
-        if (ranked.length) return { shop, tool: name, q, results: ranked, rerank: "cosine-bge-v1" };
+          ORDER BY embedding <=> ${bge}::vector LIMIT 20`;
+        if (take(ranked)) modes.push("cosine-bge-v1");
       } catch {
         // fall through
       }
@@ -83,20 +100,21 @@ export async function callTool(
     if (q) {
       const vec = toVectorLiteral(textEmbedding(q));
       try {
-        const ranked = (await sql`
+        const ranked = await sql`
           SELECT id, summary, pdp_url, (embedding <=> ${vec}::vector) AS score
           FROM video_embeddings WHERE embedding IS NOT NULL
-          ORDER BY embedding <=> ${vec}::vector LIMIT 20`) as unknown[];
-        if (ranked.length)
-          return { shop, tool: name, q, results: ranked, rerank: "cosine-v1" };
+          ORDER BY embedding <=> ${vec}::vector LIMIT 20`;
+        if (take(ranked)) modes.push("cosine-v1");
       } catch {
         // fall through
       }
     }
+    if (seen.size) return { shop, tool: name, q, results: [...seen.values()].slice(0, 20), rerank: modes.join("+") };
     const rows = (await sql`
       SELECT id, summary, pdp_url FROM video_embeddings
       WHERE summary::text ILIKE ${"%" + q + "%"} LIMIT 20`) as unknown[];
-    return { shop, tool: name, q, results: rows, rerank: "text-fallback" };
+    take(rows);
+    return { shop, tool: name, q, results: [...seen.values()].slice(0, 20), rerank: "text-fallback" };
   }
   if (name === "get_video_summary") {
     const videoId = String(args.video_id ?? "");
