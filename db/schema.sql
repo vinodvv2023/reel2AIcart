@@ -113,3 +113,21 @@ CREATE TABLE IF NOT EXISTS ingest_jobs (
 );
 CREATE INDEX IF NOT EXISTS ingest_jobs_recent ON ingest_jobs (created_at DESC);
 CREATE INDEX IF NOT EXISTS ingest_jobs_shop ON ingest_jobs (shop, created_at DESC);
+
+-- Generated-image audit/history (connect Pick-a-product, Muse Image 1.0).
+-- One row per generation: shop + product + style, newest-first via the
+-- lookup index; generating/keeping never mutates Shopify catalog data.
+CREATE TABLE IF NOT EXISTS generated_images (
+  id SERIAL PRIMARY KEY,
+  shop TEXT NOT NULL,
+  product_id TEXT NOT NULL,
+  variant_id TEXT NOT NULL DEFAULT '',
+  style TEXT NOT NULL CHECK (style IN ('flat-lay','folded-stack','single-folded','ghost-mannequin','hanger','on-actor')),
+  prompt_version TEXT NOT NULL DEFAULT 'v1',
+  source_mode TEXT NOT NULL CHECK (source_mode IN ('with-image','text-only')),
+  provider TEXT NOT NULL DEFAULT 'muse-image-1.0',
+  output_url TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_generated_images_lookup
+  ON generated_images (shop, product_id, style, created_at DESC);
