@@ -247,7 +247,7 @@ Instagram tagging goes through Meta — set these up once per merchant:
 
 ## Usage
 
-- `/` — dashboard: video cache / embedding counts, enrichment worker status, Scan existing catalog, store readiness (webMCP), webhook deliveries, enrichment outcomes, agent search FAB.
+- `/` — dashboard: video cache / embedding counts, enrichment worker status, Scan existing catalog, how-to-test card, store readiness (webMCP), webhook deliveries, enrichment outcomes, agent search FAB.
 - `/connect` — Tag-a-reel workspace (reels left, products right, review table, tag action; history in `tag_events`).
 - `/agent` — full chat/search over shoppable videos with PDP links. Two tabs: **Ask** (multi-turn function-calling; `muse` default via `MODEL_API_KEY`, hardcoded model `muse-spark-1.3-contributor` — or `grok` via `XAI_API_KEY` + `GROK_MODEL`) and **Search** (direct vector cards over `/mcp`; bge re-rank needs `DEEPINFRA_TOKEN`). Ask links carry `utm_source=agent-chat`.
 - `/scan?shop=…` — scan progress page.
@@ -269,6 +269,7 @@ Open `https://<your-app>/?shop=<your-shop>` (the `?shop=` comes automatically wh
   - **Scan existing catalog** (POST `/api/scan`) — queues one scan job (one Admin page of 250 products per cron tick, `~2 req/s` safe). While open, the button flips to a disabled **Scan in progress** state.
   - **Watch progress** → `/scan?shop=…` (monitor page, below).
   - Banners: `Scan complete — N checked, M analyzed(, K need review)`, or `Scan stopped: <error>`.
+- **How to test card** - guided demo loop, no need to add products first: **Delete one entry** removes ONE product's AI summary from the index (Shopify products untouched; verified rows never eligible) → **Scan existing catalog** spots the gap and sends it for analysis → **Enrichment outcomes** flips `sent - outcome pending` to `enriched` while the embeddings count climbs back. **2 test resets per browser** (cookie `r2ac_test_deletes`; button shows remaining); the 3rd attempt is refused with *"You have tried the maximum for testing."* Clearing cookies resets it — soft gate for test stores, not security.
 - **Store readiness (webMCP) card** — one line per check: shop, `token ok/dead`, `scopes ok` or `missing: …`, `MCP ready/error` (`ready` = token + scopes + ≥1 embedding row), row count, check count, timestamp.
   - **Re-check** (POST `/api/activate`, per shop) — re-runs the activation check now and returns a banner like `Re-check 14:22 UTC - token ok, scopes ok, MCP ready (38 rows)`. No navigation; result shows on the same card.
   - Note line: webhooks are declared at deploy; **openapi.yaml** link = the agent entry contract.
@@ -314,6 +315,7 @@ Three steps, all selection state in the URL (`?reel=&product=&variant=`) so refr
 | OAuth "redirect_uri is not whitelisted" (incl. `shopify app dev` tunnel) | `auth.login.tsx` hardcodes the prod URL → Fork checklist (§5b) |
 | Attribution rows never appear | Cookie→note bridge missing (Configure Shopify item 5); or Flow `x-flow-secret` ≠ `CRON_SECRET`; or native orders webhook pending approval → use Flow (§5a) |
 | Cron endpoints 401 in logs | Normal if `CRON_SECRET` unset — set it in Vercel env; Vercel sends the header automatically |
+| Test reset button disabled / "maximum for testing" | 2 resets per browser (cookie `r2ac_test_deletes`) — clear cookies for that browser to test again |
 | YouTube feed / Gemini vision missing | Stubs, not bugs — `app/lib/activation/youtube.ts` is a TODO, Modal `gemini` provider is planned (see Not yet implemented) |
 | `docs/` empty after clone | Expected — `docs/` is gitignored (local-only). Key decisions are summarized in this README |
 
