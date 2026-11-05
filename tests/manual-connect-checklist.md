@@ -7,7 +7,7 @@ Requires `MODEL_API_KEY` + `MUSE_IMAGE_MODEL` in Vercel env (server-only).
 
 1. Pick a reel (left), a product + variant (right); confirm the review table mirrors the picks.
 2. Generate panel unlocks. Generate each of the 6 styles
-   (`flat-lay`, `folded-stack`, `single-folded`, `ghost-mannequin`, `hanger`, `on-actor`);
+   (`flat-lay`, `folded-stack`, `single-stack`, `ghost-mannequin`, `hanger`, `on-actor`);
    confirm a preview renders with the correct `sourceMode` caption
    (with-image vs text-only), picks stay selected, no redirect.
 3. Regenerate the same style; confirm a new preview without losing picks.
