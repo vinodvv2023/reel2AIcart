@@ -4,7 +4,7 @@ import { loadService, withFetch, jsonBody } from "./helpers/route-harness.mjs";
 
 // Service under test: app/lib/image/generate.ts (T2, refs #5).
 // Expected values come from the spec (issue #1): 6 styles, 5 error codes.
-const STYLES = ["flat-lay", "folded-stack", "single-folded", "ghost-mannequin", "hanger", "on-actor"];
+const STYLES = ["flat-lay", "folded-stack", "single-stack", "ghost-mannequin", "hanger", "on-actor"];
 
 const { buildImagePrompt, buildImageRequest, generateImage, imagesGenerationsUrl, imagesEditsUrl, PROMPT_VERSION, IMAGE_PROVIDER } = loadService();
 
@@ -28,6 +28,22 @@ describe("image service contract", () => {
     );
     assert.equal(new Set(prompts).size, 6);
     for (const p of prompts) assert.match(p, /Emerald Gown/);
+  });
+
+  it("folded-stack demands multiple units, single-stack exactly one", () => {
+    const stack = buildImagePrompt({ title: "Gown", style: "folded-stack" }).prompt;
+    assert.match(stack, /more than one folded item/);
+    const single = buildImagePrompt({ title: "Gown", style: "single-stack" }).prompt;
+    assert.match(single, /one item only/);
+  });
+
+  it("on-actor drops the face clause and demands a fresh pose off the reference", () => {
+    const withRef = buildImagePrompt({ title: "Gown", style: "on-actor", referenceImageUrl: "https://cdn/x.jpg" }).prompt;
+    assert.doesNotMatch(withRef, /face out of focus/);
+    assert.match(withRef, /different from the reference/);
+    const textOnly = buildImagePrompt({ title: "Gown", style: "on-actor" }).prompt;
+    assert.doesNotMatch(textOnly, /face out of focus/);
+    assert.doesNotMatch(textOnly, /different from the reference/);
   });
 
   it("uses with-image mode with a reference photo, text-only without", () => {

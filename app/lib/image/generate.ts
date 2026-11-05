@@ -9,7 +9,7 @@
 // T3 note: if Remix/Vercel action limits bite (gen takes 30-120s+), switch this
 // synchronous-but-bounded call to a job row (queued->done/failed) + GET-poll render.
 export type ImageStyle =
-  | "flat-lay" | "folded-stack" | "single-folded"
+  | "flat-lay" | "folded-stack" | "single-stack"
   | "ghost-mannequin" | "hanger" | "on-actor";
 export type SourceMode = "with-image" | "text-only";
 export type ImageErrorCode =
@@ -18,11 +18,11 @@ export const PROMPT_VERSION = "v1";
 export const IMAGE_PROVIDER = "muse-image-1.0";
 const STYLE_SCENES: Record<ImageStyle, string> = {
   "flat-lay": "clean top-down flat-lay on a seamless light backdrop, garment fully spread, no people",
-  "folded-stack": "neat stack of multiple folded units, top-down three-quarter view, no people",
-  "single-folded": "one crisply folded unit centered on a seamless backdrop, e-commerce thumbnail, no people",
+  "folded-stack": "tall stack of multiple folded units of the same garment (at least four), top-down three-quarter view, clearly more than one folded item, no people",
+  "single-stack": "exactly one single folded garment centered on a seamless backdrop, one item only, e-commerce thumbnail, no people",
   "ghost-mannequin": "invisible-mannequin apparel shot showing fit and drape, no visible model or mannequin parts",
   hanger: "garment on a simple hanger against a seamless backdrop, category-grid shot, no people",
-  "on-actor": "worn-by-model lifestyle shot, neutral pose and backdrop, face out of focus",
+  "on-actor": "worn-by-model lifestyle shot on a neutral backdrop, natural standing pose",
 };
 export function buildImagePrompt(input: {
   title: string; variantTitle?: string; referenceImageUrl?: string; style: ImageStyle;
@@ -30,12 +30,17 @@ export function buildImagePrompt(input: {
   const scene = STYLE_SCENES[input.style];
   if (!scene) throw new Error(`unknown style: ${String(input.style)}`);
   const variant = input.variantTitle?.trim() ? `, variant ${input.variantTitle.trim()}` : "";
-  const ref = input.referenceImageUrl?.trim()
-    ? ` Match the color, print, and details of the reference product photo.`
+  const hasRef = Boolean(input.referenceImageUrl?.trim());
+  // On-actor must not mirror the reference pose (refs #10 follow-up).
+  const pose = hasRef && input.style === "on-actor"
+    ? ` Use a fresh pose clearly different from the reference photo.`
+    : ``;
+  const ref = hasRef
+    ? ` Match the color, print, and details of the reference product photo.${pose}`
     : ` No reference photo available; interpret freely from the product name.`;
   return {
     prompt: `Product photo of ${input.title.trim()}${variant}: ${scene}.${ref}`,
-    sourceMode: input.referenceImageUrl?.trim() ? "with-image" : "text-only",
+    sourceMode: hasRef ? "with-image" : "text-only",
   };
 }
 // Adapters: single place encoding the endpoint paths (see contract above).

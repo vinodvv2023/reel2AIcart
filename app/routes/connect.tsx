@@ -13,7 +13,7 @@ type Reel = { id: string; caption?: string; thumbnail_url?: string; media_url?: 
 type Variant = { id: number; title: string; price: string };
 type Product = { id: number; title: string; image?: string; variants: Variant[] };
 const PER_PAGE = 8;
-const STYLES = ["flat-lay", "folded-stack", "single-folded", "ghost-mannequin", "hanger", "on-actor"] as const;
+const STYLES = ["flat-lay", "folded-stack", "single-stack", "ghost-mannequin", "hanger", "on-actor"] as const;
 const isGenStyle = (s: string): s is ImageStyle => (STYLES as readonly string[]).includes(s);
 
 async function igMedia(): Promise<{ reels: Reel[]; error: string | null }> {
