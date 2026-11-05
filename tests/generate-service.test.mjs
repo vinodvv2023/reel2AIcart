@@ -82,6 +82,17 @@ describe("image service contract", () => {
     }, { calls: 0 });
   });
 
+  it("condenses OpenAI-style provider errors to one evidence line", () => {
+    const { providerErrorDetail } = loadService();
+    assert.equal(
+      providerErrorDetail(JSON.stringify({ error: { type: "invalid_request_error", message: "images[0] bad", param: "images[0].image_url", code: "invalid_image" } })),
+      "invalid_request_error | code=invalid_image | param=images[0].image_url | images[0] bad",
+    );
+    assert.equal(providerErrorDetail("  plain   failure\ntext  "), "plain failure text");
+    assert.equal(providerErrorDetail(""), "");
+    assert.equal(providerErrorDetail("x".repeat(600)).length, 500);
+  });
+
   it("maps provider failures to the spec error codes", async () => {
     const cases = [
       [429, "busy", "rate-limit"],

@@ -88,7 +88,26 @@ export type GenerateSuccess = {
   endpoint: ImageEndpoint; model: string; referenceAttached: boolean;
   requestBody: Record<string, unknown>;
 };
-export type GenerateFailure = { ok: false; error: { code: ImageErrorCode; message: string } };
+export type GenerateError = { code: ImageErrorCode; message: string; detail?: string };
+export type GenerateFailure = { ok: false; error: GenerateError };
+// Provider error bodies are OpenAI-style ({error:{type,message,param,code}}) or
+// plain text. Condense to one evidence line (<=500 chars) for the UI + logs;
+// the Bearer key never appears in a response body, so this is safe to display.
+export function providerErrorDetail(body: string): string {
+  const text = body.replace(/\s+/g, " ").trim().slice(0, 500);
+  if (!text) return "";
+  try {
+    const parsed = JSON.parse(text) as { error?: { type?: string; message?: string; param?: string; code?: string } };
+    const e = parsed?.error;
+    if (e && typeof e === "object") {
+      const bits = [e.type, e.code ? `code=${e.code}` : "", e.param ? `param=${e.param}` : "", e.message].filter(Boolean);
+      if (bits.length) return bits.join(" | ");
+    }
+  } catch {
+    // not JSON — fall through to the raw snippet
+  }
+  return text;
+}
 export async function generateImage(input: {
   shop: string; productId: string; variantId?: string; title: string;
   variantTitle?: string; referenceImageUrl?: string; style: ImageStyle; timeoutMs?: number;
@@ -111,11 +130,12 @@ export async function generateImage(input: {
       return { ok: false, error: { code: "rate-limit", message: "Image provider rate limit hit; try again shortly." } };
     if (!res.ok) {
       const body = await res.text().catch(() => "");
+      const detail = providerErrorDetail(body);
       if (/content[\s_-]?filter|moderation|safety|blocked/i.test(body))
-        return { ok: false, error: { code: "content-filter", message: "Provider refused the image request (content filter) - try a different photo or style." } };
+        return { ok: false, error: { code: "content-filter", message: "Provider refused the image request (content filter) - try a different photo or style.", detail } };
       if (res.status >= 400 && res.status < 500)
-        return { ok: false, error: { code: "provider-4xx", message: `Image request rejected by the provider (status ${res.status}) - check the product details and try again.` } };
-      return { ok: false, error: { code: "provider-5xx", message: `Image provider error (status ${res.status}) - try again shortly.` } };
+        return { ok: false, error: { code: "provider-4xx", message: `Image request rejected by the provider (status ${res.status}) - check the product details and try again.`, detail } };
+      return { ok: false, error: { code: "provider-5xx", message: `Image provider error (status ${res.status}) - try again shortly.`, detail } };
     }
     const json = (await res.json()) as {
       data?: ({ url?: string; b64_json?: string })[]; output_format?: string;
