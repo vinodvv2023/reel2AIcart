@@ -10,6 +10,7 @@
 
 - **Shoppable video:** Instagram Reels / YouTube Shorts and Shopify product videos are analyzed **once per video** (offline), cached, and served as timeline-tagged products on the PDP and on Instagram itself.
 - **Agent-ready commerce:** an MCP server at `/mcp/{shop}` exposes 4 tools (`search_products`, `get_product_details`, `get_inventory`, `get_video_summary`) so any agent (Meta AI, Muse, ChatGPT, Claude) can query the store without re-running vision.
+- **AI product imagery (Muse Image 1.0):** optional per-product generation inside `/connect` — 6 display styles (flat-lay + wrinkle-free toggle, folded stack, single stack, ghost mannequin, hanger, on-actor), grounded on the Shopify product photo via the image-edits endpoint; preview → keep → download / push to Shopify Files. $0.01 per image, never touches the live catalog image.
 - **Merchant dashboard (embedded):** pipeline health, catalog scan, store readiness, webhook deliveries, enrichment outcomes, tag-a-reel workspace (`/connect`), agent search (`/agent`).
 
 Core insight: use Muse Spark's native multimodal perception **once per video offline**, cache the result in Neon, and never re-extract on every view. Cuts inference cost ~95%.
@@ -23,6 +24,7 @@ Core insight: use Muse Spark's native multimodal perception **once per video off
 | 3 | No agent commerce | No MCP for custom stores; agentic storefronts closed beta, not video-aware | MCP server with 4 tools reading Neon cache (<20 ms, zero vision) |
 | 4 | Commerce Account setup hell (`IE_30007`, `IE_30002`, `IE_30010`, "Failed to Replace Commerce Account") | Raw `{{IE_…}}` placeholders, failing loop when account under review | `{{IE_}}` → human message + fallback to on-site widget (YouTube: planned); documents that IG tags only show in the mobile app, not desktop web |
 | 5 | No video attribution | Can't tell if a sale came from a Reel at 00:08 | Every PDP URL carries `?agent_source=instagram_reel&agent_video_id=…&agent_t=08&utm_source=…`; orders attributed via `note_attributes._shopify_video` → `order_attribution` table |
+| 6 | Weak/missing catalog imagery (single supplier photo) | Reshoots per SKU | Optional Muse Image 1.0 generation in `/connect`: pick product → style → preview (prompt + request shown) → keep; reference photo attached via the edits endpoint; history in `generated_images`; download or push to Shopify Files; failures show the provider's response. Live catalog image never mutated |
 
 ## Architecture (5 layers)
 
@@ -92,7 +94,8 @@ cp .env.example .env   # then fill in values (never commit .env)
 | `IG_USER_ID` | `{page-id}?fields=instagram_business_account` or the Add-account wizard | IG business account id |
 | `META_APP_ID` / `META_APP_SECRET` | Meta App → Settings → Basic | Only for the 60-day token-exchange fallback |
 | `VISION_PROVIDER` / `EMBED_PROVIDER` | Set to `muse` (hackathon default) | Modal secret `app-config` |
-| `MODEL_API_KEY` (or `META_API_KEY`), `META_BASE_URL`, `MUSE_VISION_MODEL`, `MUSE_EMBED_MODEL` | dev.meta.ai | Modal Muse vision + embeddings (`MUSE_EMBED_MODEL` optional — unset falls back to hash vectors). `MODEL_API_KEY` doubles as the /agent Ask-tab Muse key |
+| `MODEL_API_KEY` (or `META_API_KEY`), `META_BASE_URL`, `MUSE_VISION_MODEL`, `MUSE_EMBED_MODEL` | dev.meta.ai | Modal Muse vision + embeddings (`MUSE_EMBED_MODEL` optional — unset falls back to hash vectors). `MODEL_API_KEY` doubles as the /agent Ask-tab Muse key and the image-generation key |
+| `MUSE_IMAGE_MODEL` | dev.meta.ai | Muse Image 1.0 model id for `/connect` generation (default `muse-image-1.0` when unset). Billed $0.01 per generated image |
 | `DEEPINFRA_TOKEN`, `DEEPINFRA_EMBED_MODEL` | DeepInfra dashboard | bge-large (native 1024-dim). Modal embeddings when `EMBED_PROVIDER=deepinfra` AND the server-side bge re-rank in `/mcp` + `/agent` search — unset silently falls back to hash/text matching |
 | `CRON_SECRET` | You generate (`openssl rand -hex 32`) | Bearer secret for Vercel cron endpoints (`/api/scan-worker`, `/api/attribute-orders`). Just set the var — Vercel automatically sends `Authorization: Bearer <CRON_SECRET>` on cron invocations, no extra config |
 | `XAI_API_KEY`, `GROK_MODEL` | x.ai console | /agent Ask-tab second provider (`grok`). Muse (default) needs no extra var beyond `MODEL_API_KEY` |
@@ -248,7 +251,7 @@ Instagram tagging goes through Meta — set these up once per merchant:
 ## Usage
 
 - `/` — dashboard: video cache / embedding counts, enrichment worker status, Scan existing catalog, how-to-test card, store readiness (webMCP), webhook deliveries, enrichment outcomes, agent search FAB.
-- `/connect` — Tag-a-reel workspace (reels left, products right, review table, tag action; history in `tag_events`).
+- `/connect` — Tag-a-reel workspace (reels left, products right, optional Muse Image 1.0 generation, review table, tag action; tag history in `tag_events`, image history in `generated_images`).
 - `/agent` — full chat/search over shoppable videos with PDP links. Two tabs: **Ask** (multi-turn function-calling; `muse` default via `MODEL_API_KEY`, hardcoded model `muse-spark-1.3-contributor` — or `grok` via `XAI_API_KEY` + `GROK_MODEL`) and **Search** (direct vector cards over `/mcp`; bge re-rank needs `DEEPINFRA_TOKEN`). Ask links carry `utm_source=agent-chat`.
 - `/scan?shop=…` — scan progress page.
 - `/mcp/{shop}` — MCP endpoint. Tools: `search_products(query, image_embedding?, price_max?)`, `get_product_details(sku)`, `get_inventory(sku)`, `get_video_summary(video_id)`. GET legacy params or POST MCP Streamable HTTP.
@@ -279,13 +282,14 @@ Open `https://<your-app>/?shop=<your-shop>` (the `?shop=` comes automatically wh
 
 ### Tag-a-reel (`/connect`)
 
-Three steps, all selection state in the URL (`?reel=&product=&variant=`) so refresh/sharing never loses your picks.
+Pick flows, all selection state in the URL (`?reel=&product=&variant=&style=`, with `pg/rpg` pages preserved across picks) so refresh/sharing never loses your picks. Picking a product resets the style; fresh searches reset to page 1.
 
 - **Back to dashboard** (top) → `/`.
 - **Intro card** — connection status (`Instagram is connected` vs `missing keys - set META_GRAPH_TOKEN + IG_USER_ID`), the Commerce-Account hint line, and the expected outcome (green confirmation + tags visible on the reel **in mobile** within minutes).
-- **1. Pick a reel** — **Search reels** form (filters by caption/id, 8 per page, **Prev/Next** pager), each row shows thumbnail (or inline video preview), caption, id, date, plus a badge if *this app* already tagged it here (`Tagged here on <date>` green / `Tag attempt failed` red — from `tag_events`, survives token expiry).
-- **2. Pick a product** — **Search products** form (by title), same paging; multi-variant products open a **variant dialog** listing each variant + price + id (the id is sent as the Meta catalog product ID — see §2). **Done** closes the dialog.
-- **3. Review and tag** — mirror table of your three picks + **Clear** (resets the URL state). **Tag products on reel** (POST) is disabled until reel + product + variant are all chosen; on success/failure a banner shows the outcome (`Tagged reel <id> - check the reel on mobile…` vs the exact Graph error, logged to `tag_events` either way).
+- **1. Pick a reel** — **Search reels** form (filters by caption/id, 8 per page, **Prev/Next** pager), each row shows thumbnail (or inline video preview), caption, id, date, plus a badge if *this app* already tagged it here (`Tagged here on <date>` green / `Tag attempt failed` red — from `tag_events`, survives token expiry). Header links out to the Instagram profile so viewers can check the source reels.
+- **2. Pick a product** — **Search products** form (by title), same paging; header links out to the Shopify store so viewers can check the catalog. Multi-variant products open a **variant dialog** listing each variant + price + id (the id is sent as the Meta catalog product ID — see §2). **Done** closes the dialog.
+- **3. Generate product image (optional)** — after picking a product: 6 style pills (`flat-lay`, `folded-stack`, `single-stack`, `ghost-mannequin`, `hanger`, `on-actor`; flat-lay carries a **Wrinkle free** checkbox, default on). **Generate/Regenerate** shows a full-size preview plus a **Prompt & request details** disclosure (style, model, endpoint, reference attachment, full prompt, request body — visible before generating too, computed from your picks). **Keep/Discard**, **Download**, history thumbnails (newest first), and **Push to Shopify Files** (explicit confirmed export; upgrades the stored row to the CDN URL). Failures show a **Why did this fail?** disclosure with the provider's response. Nothing here touches the live catalog image.
+- **4. Review and tag** — mirror table of your three picks + **Clear** (resets the URL state). **Tag products on reel** (POST) is disabled until reel + product + variant are all chosen; on success/failure a banner shows the outcome (`Tagged reel <id> - check the reel on mobile…` vs the exact Graph error, logged to `tag_events` either way).
 
 ### Assistant (`/agent`)
 
@@ -324,11 +328,13 @@ Three steps, all selection state in the URL (`?reel=&product=&variant=`) so refr
 ```
 app/                  Remix app (Vercel)
   routes/             /, /connect, /agent, /scan, /mcp.$shopId, /api.*, /webhooks.*, /auth.*
-  lib/                db.ts, mcp/, shopify/, video/, activation/
+  lib/                db.ts, mcp/, shopify/, video/, activation/, image/ (Muse Image 1.0 prompt builder + provider calls)
   tokens.css          shared r2ac styles
 extensions/shoppable-video-widget/   Theme App Extension (PDP widget)
 modal/enrich_video.py Modal GPU: Muse vision + embeddings → Neon (+ ingest webhook)
 db/schema.sql         Neon tables + pgvector HNSW index (re-runnable: all `IF NOT EXISTS`)
+db/migrate-*.sql      One-off migrations (Neon-editor-safe, idempotent — e.g. `generated_images` table, style-vocabulary rename)
+tests/                node:test suite, zero new deps (route action/loader tests via a transpile harness) + manual `/connect` checklist
 db/cleanup-shop.sql   Fresh-start reset (Neon-SQL-editor-safe; psql `\set` unsupported there)
 docs/                 PRD, checklists, scan/activation, tag visibility — GITIGNORED, local-only: fresh clones don't get it
 scripts/              agent_demo.py (MCP function-calling demo) + bulk_e2e.py (Modal-parity bulk enrich)
@@ -337,12 +343,13 @@ shopify.app.toml      App config: scopes, webhooks, extension
 
 ## Cost (~$20–25/mo + inference)
 
-Vercel Pro ($0–20) + Neon (free 0.5 GB, then ~$5) + Modal pay-per-second (~$10–15 for 500 videos) + Vercel Blob/R2 ($0). Drops Qdrant/Upstash/Fly (~$125/mo → ~$25/mo). Inference $0.10–0.15/video self-hosted, once per video, cached forever.
+Vercel Pro ($0–20) + Neon (free 0.5 GB, then ~$5) + Modal pay-per-second (~$10–15 for 500 videos) + Vercel Blob/R2 ($0). Drops Qdrant/Upstash/Fly (~$125/mo → ~$25/mo). Inference $0.10–0.15/video self-hosted, once per video, cached forever. Image generation $0.01 per generated image (Muse Image 1.0; failed generations aren't billed).
 
 ## Scripts
 
 - `npm run dev` — local Remix dev
 - `npm run build` — production build
+- `npm test` — node:test suite (route + service tests, all provider/DB edges mocked)
 - `npx tsc --noEmit` — typecheck (`npm run typecheck`)
 - `python scripts/agent_demo.py "maroon gown"` — Muse function-calling over MCP tools. Needs `MODEL_API_KEY` in env; `APP_URL`/`SHOP` env overrides (defaults: prod app + test shop). Stdlib only.
 - `python scripts/bulk_e2e.py [--write] [--shop SHOP]` — Modal-parity bulk enrichment + MCP probes. Default is dry-run; `--write` upserts `provider=bulk-local-v1` rows (needs `DATABASE_URL` in `.env` + `psycopg2-binary` in `.venv`). Clean up test rows with: `DELETE FROM video_cache WHERE video_id IN (SELECT video_hash FROM video_embeddings WHERE summary->>'provider'='bulk-local-v1'); DELETE FROM video_embeddings WHERE summary->>'provider'='bulk-local-v1';`
