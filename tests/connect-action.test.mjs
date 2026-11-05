@@ -96,9 +96,19 @@ describe("connect generate intent", () => {
 
   it("provider 4xx surfaces as 400, not 502", async () => {
     await withFetch(() => new Response("bad request", { status: 400 }), async () => {
-      const { status, body } = await act(GEN);
+      const { status, body } = await act({ ...GEN, referenceImageUrl: "" });
       assert.equal(status, 400);
       assert.match(body.error, /rejected by the provider/i);
+    });
+  });
+
+  it("failed generation carries the provider detail for display", async () => {
+    const providerBody = JSON.stringify({ error: { type: "invalid_request_error", message: "images[0] is not an image", param: "images[0].image_url" } });
+    await withFetch(() => new Response(providerBody, { status: 400 }), async () => {
+      const { status, body } = await act(GEN);
+      assert.equal(status, 400);
+      assert.match(body.detail, /images\[0\] is not an image/);
+      assert.match(body.detail, /param=images\[0\]\.image_url/);
     });
   });
 

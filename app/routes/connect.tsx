@@ -201,7 +201,10 @@ function genErrorStatus(code: ImageErrorCode): number {
 }
 function toGenResponse(res: GenerateSuccess | GenerateFailure) {
   if (!res.ok)
-    return json({ intent: "generate" as const, ok: false as const, error: res.error.message }, { status: genErrorStatus(res.error.code) });
+    return json({
+      intent: "generate" as const, ok: false as const, error: res.error.message,
+      detail: res.error.detail ?? "",
+    }, { status: genErrorStatus(res.error.code) });
   // Prompt + request shape ride along for the preview-time <details>
   // disclosure (transparency only — no secret material: the Bearer key never
   // leaves the server and is not part of requestBody).
@@ -229,9 +232,9 @@ async function generateAction(form: FormData) {
   const variantId = String(form.get("variantId") ?? "").trim();
   const style = String(form.get("style") ?? "").trim();
   if (!productId)
-    return json({ intent: "generate" as const, ok: false as const, error: "Pick a product above first, then choose a style and generate." }, { status: 400 });
+    return json({ intent: "generate" as const, ok: false as const, error: "Pick a product above first, then choose a style and generate.", detail: "" }, { status: 400 });
   if (!isGenStyle(style))
-    return json({ intent: "generate" as const, ok: false as const, error: "Pick one of the 6 styles above, then generate." }, { status: 400 });
+    return json({ intent: "generate" as const, ok: false as const, error: "Pick one of the 6 styles above, then generate.", detail: "" }, { status: 400 });
   const title = String(form.get("productTitle") ?? "").trim() || `Product ${productId}`;
   const variantTitle = String(form.get("variantTitle") ?? "").trim();
   const referenceImageUrl = String(form.get("referenceImageUrl") ?? "").trim();
@@ -258,7 +261,8 @@ async function generateAction(form: FormData) {
     const res = await run;
     await logGeneration({ shop, productId, variantId, style,
       outcome: res.ok ? "ok" : "failed",
-      cause: res.ok ? "sourceMode=" + res.sourceMode : res.error.code + ": " + res.error.message });
+      cause: res.ok ? "sourceMode=" + res.sourceMode
+        : res.error.code + ": " + res.error.message + (res.error.detail ? " | " + res.error.detail : "") });
     return toGenResponse(res);
   } finally {
     inflightGen.delete(dedupeKey);
@@ -724,7 +728,22 @@ export default function Connect() {
             )}
           </>
         )}
-        {genResult && !genResult.ok && <p role="alert" className="r2ac-err">{genResult.error}</p>}
+          {genResult && !genResult.ok && (
+            <>
+              <p role="alert" className="r2ac-err">{genResult.error}</p>
+              <details style={{ marginTop: 8 }}>
+                <summary><small>Why did this fail? (provider response{detailData ? " + request sent" : ""})</small></summary>
+                <p><small>Provider said:</small></p>
+                <pre style={{ whiteSpace: "pre-wrap", fontSize: 12 }}>{genResult.detail || "(no further detail from the provider)"}</pre>
+                {detailData && (
+                  <>
+                    <p><small>Request that was sent (auth header omitted):</small></p>
+                    <pre style={{ whiteSpace: "pre-wrap", fontSize: 12 }}>POST /v1/images/{detailData.endpoint}{"\n"}{JSON.stringify(detailData.requestBody, null, 2)}</pre>
+                  </>
+                )}
+              </details>
+            </>
+          )}
       </section>
 
       <section className="r2ac-card" style={{ marginTop: 20 }} aria-label="Review and tag">
