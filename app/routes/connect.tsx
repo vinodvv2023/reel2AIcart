@@ -3,7 +3,7 @@ import { Form, useActionData, useLoaderData, useNavigation } from "@remix-run/re
 import { tagInstagram } from "~/lib/activation/instagram";
 import { humanizeCommerceError } from "~/lib/shopify/commerce-errors";
 import { db } from "~/lib/db";
-import { generateImage, PROMPT_VERSION, IMAGE_PROVIDER, type GenerateFailure, type GenerateSuccess, type ImageErrorCode, type ImageStyle } from "~/lib/image/generate";
+import { buildImageRequest, generateImage, PROMPT_VERSION, IMAGE_PROVIDER, type GenerateFailure, type GenerateSuccess, type ImageErrorCode, type ImageStyle } from "~/lib/image/generate";
 
 // Tag-a-reel workspace: reels left, products right, review table above Tag.
 // All selection is URL state (?reel ?product ?variant) so the review table
@@ -122,6 +122,20 @@ export async function loader({ request }: LoaderFunctionArgs) {
       // history is additive; page works without it
     }
   }
+  // Prompt & request preview (refs #10): the prompt is deterministic from the
+  // pick, so the disclosure renders as soon as a style is selected — before
+  // anything is generated. Same builder the generate action uses, so preview
+  // and actual request can never drift apart.
+  const promptPreview = selProduct && genStyle ? (() => {
+    const req = buildImageRequest({
+      title: selProduct.title, variantTitle: selVariant?.title ?? "",
+      referenceImageUrl: selProduct.image ?? "", style: genStyle,
+    });
+    return {
+      prompt: req.prompt, endpoint: req.endpoint, model: req.model,
+      referenceAttached: req.referenceAttached, requestBody: req.body,
+    };
+  })() : null;
   return json({
     hint: humanizeCommerceError("{{IE_30010}}"),
     origin: new URL(request.url).origin,
@@ -147,6 +161,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     selVariant,
     taggedHere,
     genHistory,
+    promptPreview,
   });
 }
 
@@ -408,12 +423,20 @@ function dlProps(url: string, origin: string, name: string): { download?: string
 
 export default function Connect() {
   const { hint, ig, reels, reelsError, rTotal, rPage, rPages, products, productsError, total, page, pages,
-    q, rq, productId, variantId, reelId, genStyle, selReel, selProduct, selVariant, taggedHere, genHistory, origin } =
+    q, rq, productId, variantId, reelId, genStyle, selReel, selProduct, selVariant, taggedHere, genHistory, promptPreview, origin } =
     useLoaderData<typeof loader>();
   const result = useActionData<typeof action>();
   const nav = useNavigation();
   const tagResult = result?.intent === "tag" ? result : null;
   const genResult = result?.intent === "generate" ? result : null;
+  // Fresh preview wins; otherwise the loader's pre-generation preview (same
+  // builder, so identical for identical picks).
+  const detailData = genResult?.ok
+    ? {
+        prompt: genResult.prompt, endpoint: genResult.endpoint, model: genResult.model,
+        referenceAttached: genResult.referenceAttached, requestBody: genResult.requestBody,
+      }
+    : promptPreview;
   const keepResult = result?.intent === "keep" ? result : null;
   const exportResult = result?.intent === "export" ? result : null;
   const exportKept = keepResult?.ok ? { style: genStyle, outputUrl: keepResult.outputUrl } : genHistory.find((h) => h.style === genStyle);
@@ -615,27 +638,29 @@ export default function Connect() {
                 </a>
                 <figcaption><small>{genStyle} · {genResult.sourceMode === "with-image" ? "matched to product photo" : "interpreted from product name"}</small></figcaption>
                 <a className="btn btn-ghost" href={genResult.outputUrl} {...dlProps(genResult.outputUrl, origin, downloadName(selProduct.title, genStyle, genResult.outputUrl))} aria-label={`Download ${genStyle} image of ${selProduct.title}`}>Download</a>
-                <details style={{ marginTop: 8 }}>
-                  <summary><small>Prompt &amp; request details</small></summary>
-                  <p><small>
-                    Style <strong>{genStyle}</strong> · model <code>{genResult.model}</code> ·
-                    endpoint <code>POST /v1/images/{genResult.endpoint}</code> ·{" "}
-                    {genResult.referenceAttached ? "reference product photo attached" : "no reference photo (text-only)"} ·
-                    auth via server-only Bearer key (never shown).
-                  </small></p>
-                  {genResult.referenceAttached && selProduct.image && (
-                    <p><small>Reference: </small>
-                      <a href={selProduct.image} target="_blank" rel="noreferrer">
-                        <small>{selProduct.image.length > 90 ? selProduct.image.slice(0, 90) + "…" : selProduct.image}</small>
-                      </a>
-                    </p>
-                  )}
-                  <p><small>Prompt sent:</small></p>
-                  <pre style={{ whiteSpace: "pre-wrap", fontSize: 12 }}>{genResult.prompt}</pre>
-                  <p><small>Request body sent (auth header omitted):</small></p>
-                  <pre style={{ whiteSpace: "pre-wrap", fontSize: 12 }}>{JSON.stringify(genResult.requestBody, null, 2)}</pre>
-                </details>
               </figure>
+            )}
+            {detailData && (
+              <details style={{ marginTop: 8 }}>
+                <summary><small>Prompt &amp; request details{genResult?.ok ? "" : " (preview — nothing generated yet)"}</small></summary>
+                <p><small>
+                  Style <strong>{genStyle}</strong> · model <code>{detailData.model}</code> ·
+                  endpoint <code>POST /v1/images/{detailData.endpoint}</code> ·{" "}
+                  {detailData.referenceAttached ? "reference product photo attached" : "no reference photo (text-only)"} ·
+                  auth via server-only Bearer key (never shown).
+                </small></p>
+                {detailData.referenceAttached && selProduct.image && (
+                  <p><small>Reference: </small>
+                    <a href={selProduct.image} target="_blank" rel="noreferrer">
+                      <small>{selProduct.image.length > 90 ? selProduct.image.slice(0, 90) + "…" : selProduct.image}</small>
+                    </a>
+                  </p>
+                )}
+                <p><small>Prompt{genResult?.ok ? " sent" : " to be sent"}:</small></p>
+                <pre style={{ whiteSpace: "pre-wrap", fontSize: 12 }}>{detailData.prompt}</pre>
+                <p><small>Request body{genResult?.ok ? " sent" : " to be sent"} (auth header omitted):</small></p>
+                <pre style={{ whiteSpace: "pre-wrap", fontSize: 12 }}>{JSON.stringify(detailData.requestBody, null, 2)}</pre>
+              </details>
             )}
             {genResult?.ok && !keepResult?.ok && (
               <div style={{ display: "flex", gap: 8, marginTop: 8 }}>

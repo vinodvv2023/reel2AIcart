@@ -230,6 +230,50 @@ describe("connect export intent", () => {
   });
 });
 
+describe("connect loader prompt preview", () => {
+  const loader = loadConnectLoader();
+  const catalogFetch = (url) => {
+    if (String(url).includes("graph.facebook.com")) return jsonBody({ data: [] });
+    if (String(url).includes("/admin/api/")) return jsonBody({ products: [
+      { id: 42, title: "Emerald Gown", image: { src: "https://cdn/x.jpg" }, variants: [{ id: 7, title: "M", price: "99" }] },
+      { id: 43, title: "Plain Tee", image: null, variants: [{ id: 8, title: "S", price: "20" }] },
+    ] });
+    throw new Error("unexpected fetch: " + url);
+  };
+
+  it("shows the prompt preview on style select with the reference attached", async () => {
+    dbStubHolder.current = makeDb();
+    await withFetch(catalogFetch, async () => {
+      const res = await loader({ request: new Request("http://test/connect?product=42&style=flat-lay"), params: {}, context: {} });
+      const body = await res.json();
+      assert.match(body.promptPreview.prompt, /Emerald Gown/);
+      assert.match(body.promptPreview.prompt, /flat-lay/);
+      assert.equal(body.promptPreview.endpoint, "edits");
+      assert.equal(body.promptPreview.referenceAttached, true);
+      assert.deepEqual(body.promptPreview.requestBody.images, [{ image_url: "https://cdn/x.jpg" }]);
+    });
+  });
+
+  it("text-only product previews the generations request", async () => {
+    dbStubHolder.current = makeDb();
+    await withFetch(catalogFetch, async () => {
+      const res = await loader({ request: new Request("http://test/connect?product=43&style=hanger"), params: {}, context: {} });
+      const body = await res.json();
+      assert.equal(body.promptPreview.endpoint, "generations");
+      assert.equal(body.promptPreview.referenceAttached, false);
+    });
+  });
+
+  it("no prompt preview without a style pick", async () => {
+    dbStubHolder.current = makeDb();
+    await withFetch(catalogFetch, async () => {
+      const res = await loader({ request: new Request("http://test/connect?product=42"), params: {}, context: {} });
+      const body = await res.json();
+      assert.equal(body.promptPreview, null);
+    });
+  });
+});
+
 describe("connect loader history", () => {
   const loader = loadConnectLoader();
   const shopFetch = (url) => {
