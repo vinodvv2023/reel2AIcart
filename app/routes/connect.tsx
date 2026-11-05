@@ -102,6 +102,24 @@ export async function loader({ request }: LoaderFunctionArgs) {
   } catch {
     // history is additive; page works without it
   }
+  type GenHistory = { id: number; style: string; sourceMode: string; outputUrl: string; when: string };
+  let genHistory: GenHistory[] = [];
+  if (productId) {
+    try {
+      const sql = db();
+      const rows = (await sql`SELECT id, style, source_mode, output_url, created_at::text AS created_at
+        FROM generated_images WHERE product_id = ${productId}
+        ORDER BY created_at DESC LIMIT 12`) as {
+        id: number; style: string; source_mode: string; output_url: string; created_at: string;
+      }[];
+      genHistory = rows.map((r) => ({
+        id: r.id, style: r.style, sourceMode: r.source_mode, outputUrl: r.output_url,
+        when: r.created_at.slice(0, 16).replace("T", " "),
+      }));
+    } catch {
+      // history is additive; page works without it
+    }
+  }
   return json({
     hint: humanizeCommerceError("{{IE_30010}}"),
     ig: Boolean(process.env.META_GRAPH_TOKEN && process.env.IG_USER_ID),
@@ -125,12 +143,15 @@ export async function loader({ request }: LoaderFunctionArgs) {
     selProduct,
     selVariant,
     taggedHere,
+    genHistory,
   });
 }
 
 export async function action({ request }: ActionFunctionArgs) {
   const form = await request.formData();
-  if (String(form.get("intent") ?? "tag") === "generate") return generateAction(form);
+  const intent = String(form.get("intent") ?? "tag");
+  if (intent === "generate") return generateAction(form);
+  if (intent === "keep") return keepAction(form);
   const mediaId = String(form.get("mediaId") ?? "").trim();
   const variantId = String(form.get("variantId") ?? "").trim();
   if (!mediaId || !variantId)
@@ -170,14 +191,39 @@ async function generateAction(form: FormData) {
   }
   const res = await generateImage({
     shop, productId, variantId, title, variantTitle, referenceImageUrl, style,
-    persist: async (r) => {
-      const sql = db();
-      await sql`INSERT INTO generated_images (shop, product_id, variant_id, style, prompt_version, source_mode, provider, output_url)
-        VALUES (${r.shop}, ${r.productId}, ${r.variantId}, ${r.style}, ${r.promptVersion}, ${r.sourceMode}, ${r.provider}, ${r.outputUrl})`;
-    },
   });
   if (!res.ok) return json({ intent: "generate" as const, ok: false as const, error: res.error.message }, { status: 502 });
   return json({ intent: "generate" as const, ok: true as const, outputUrl: res.outputUrl, sourceMode: res.sourceMode });
+}
+
+// T4 (refs #6): keep persists the preview; discard is a plain GET reload so it
+// writes nothing. Double-submit guard: existence check before insert — exactly
+// one record per accept. Never throws to UI (additive convention).
+async function keepAction(form: FormData) {
+  const productId = String(form.get("productId") ?? "").trim();
+  const variantId = String(form.get("variantId") ?? "").trim();
+  const style = String(form.get("style") ?? "").trim();
+  const outputUrl = String(form.get("outputUrl") ?? "").trim();
+  const sourceMode = String(form.get("sourceMode") ?? "").trim();
+  if (!productId || !isGenStyle(style) || !outputUrl)
+    return json({ intent: "keep" as const, ok: false as const, error: "Nothing to keep — generate an image first." }, { status: 400 });
+  if (outputUrl.length > 4000 || (sourceMode !== "with-image" && sourceMode !== "text-only"))
+    return json({ intent: "keep" as const, ok: false as const, error: "Kept image looks invalid — regenerate instead." }, { status: 400 });
+  try {
+    const sql = db();
+    const shops = (await sql`SELECT shop FROM shops LIMIT 1`) as { shop: string }[];
+    const shop = shops[0]?.shop ?? "";
+    const existing = (await sql`SELECT id FROM generated_images
+      WHERE shop = ${shop} AND product_id = ${productId} AND variant_id = ${variantId}
+      AND style = ${style} AND output_url = ${outputUrl} LIMIT 1`) as { id: number }[];
+    if (existing.length)
+      return json({ intent: "keep" as const, ok: true as const, duplicate: true as const, outputUrl });
+    await sql`INSERT INTO generated_images (shop, product_id, variant_id, style, prompt_version, source_mode, provider, output_url)
+      VALUES (${shop}, ${productId}, ${variantId}, ${style}, 'v1', ${sourceMode}, 'muse-image-1.0', ${outputUrl})`;
+    return json({ intent: "keep" as const, ok: true as const, duplicate: false as const, outputUrl });
+  } catch {
+    return json({ intent: "keep" as const, ok: false as const, error: "Could not save this image — try again." }, { status: 500 });
+  }
 }
 
 async function logTag(mediaId: string, variantId: string, status: string, detail: string) {
@@ -196,12 +242,14 @@ const qs = (p: Record<string, string>) =>
 
 export default function Connect() {
   const { hint, ig, reels, reelsError, rTotal, rPage, rPages, products, productsError, total, page, pages,
-    q, rq, productId, variantId, reelId, genStyle, selReel, selProduct, selVariant, taggedHere } =
+    q, rq, productId, variantId, reelId, genStyle, selReel, selProduct, selVariant, taggedHere, genHistory } =
     useLoaderData<typeof loader>();
   const result = useActionData<typeof action>();
   const nav = useNavigation();
   const tagResult = result?.intent === "tag" ? result : null;
   const genResult = result?.intent === "generate" ? result : null;
+  const keepResult = result?.intent === "keep" ? result : null;
+  const hasStyleHistory = genStyle ? genHistory.some((h) => h.style === genStyle) : false;
   const keep = { q, rq, product: productId, variant: variantId, reel: reelId, style: genStyle };
   const complete = Boolean(selReel && selVariant);
   return (
@@ -386,7 +434,7 @@ export default function Connect() {
               <input type="hidden" name="variantTitle" value={selVariant?.title ?? ""} />
               <input type="hidden" name="referenceImageUrl" value={selProduct.image ?? ""} />
               <button type="submit" className="btn btn-primary" disabled={!genStyle || nav.state !== "idle"}>
-                {nav.state !== "idle" ? "Generating…" : genResult?.ok ? "Regenerate image" : "Generate image"}
+                {nav.state !== "idle" ? "Generating…" : genResult?.ok || hasStyleHistory ? "Regenerate image" : "Generate image"}
               </button>
               {!genStyle && <p><small>Pick a style above to enable generation.</small></p>}
             </Form>
@@ -397,6 +445,40 @@ export default function Connect() {
                   loading="lazy" style={{ maxWidth: "100%", height: "auto", borderRadius: 8 }} />
                 <figcaption><small>{genStyle} · {genResult.sourceMode === "with-image" ? "matched to product photo" : "interpreted from product name"}</small></figcaption>
               </figure>
+            )}
+            {genResult?.ok && !keepResult?.ok && (
+              <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                <Form method="post" aria-label="Keep generated image">
+                  <input type="hidden" name="intent" value="keep" />
+                  <input type="hidden" name="productId" value={productId} />
+                  <input type="hidden" name="variantId" value={variantId} />
+                  <input type="hidden" name="style" value={genStyle} />
+                  <input type="hidden" name="outputUrl" value={genResult.outputUrl} />
+                  <input type="hidden" name="sourceMode" value={genResult.sourceMode} />
+                  <button type="submit" className="btn btn-primary" disabled={nav.state !== "idle"}>Keep</button>
+                </Form>
+                <a className="btn btn-ghost" href={qs(keep)}>Discard</a>
+              </div>
+            )}
+            {keepResult && (
+              <p role={keepResult.ok ? "status" : "alert"} className={keepResult.ok ? "r2ac-ok" : "r2ac-err"}>
+                {keepResult.ok
+                  ? keepResult.duplicate ? "Already kept — exactly one record saved." : "Kept — it now appears in history below."
+                  : keepResult.error}
+              </p>
+            )}
+            {genHistory.length > 0 && (
+              <div style={{ marginTop: 12 }} aria-label="Generated image history">
+                <h3>History <small>(newest first)</small></h3>
+                <div role="list" style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                  {genHistory.map((h) => (
+                    <figure key={h.id} role="listitem" style={{ margin: 0, width: 120 }}>
+                      <img src={h.outputUrl} alt="" loading="lazy" style={{ width: 120, height: 120, objectFit: "cover", borderRadius: 8 }} />
+                      <figcaption><small><strong>{h.style}</strong> · {h.sourceMode} · {h.when}</small></figcaption>
+                    </figure>
+                  ))}
+                </div>
+              </div>
             )}
           </>
         )}
