@@ -16,6 +16,12 @@ export async function loader({ request }: LoaderFunctionArgs) {
     ok: url.searchParams.get("recheck_ok") ?? "",
     msg: url.searchParams.get("recheck_msg") ?? "",
   };
+  const testMsg = url.searchParams.get("test") ?? "";
+  const testUsed = (() => {
+    const m = /(?:^|;\s*)r2ac_test_deletes=(\d+)/.exec(request.headers.get("Cookie") ?? "");
+    const n = m ? parseInt(m[1], 10) : 0;
+    return Number.isFinite(n) && n > 0 ? Math.min(n, 99) : 0;
+  })();
   let counts = { videos: -1, products: -1 };
   let events: { topic: string; status: string; detail: string; created_at: string }[] = [];
   let installed: { shop: string; scopes: string }[] = [];
@@ -47,11 +53,11 @@ export async function loader({ request }: LoaderFunctionArgs) {
   } catch {
     // DB unreachable — page still renders, counts show as unavailable.
   }
-  return json({ shop, counts, modal: process.env.MODAL_WEBHOOK_URL ?? null, events, installed, job, readiness, recheck, ingest });
+  return json({ shop, counts, modal: process.env.MODAL_WEBHOOK_URL ?? null, events, installed, job, readiness, recheck, ingest, testMsg, testsLeft: Math.max(0, 2 - testUsed) });
 }
 
 export default function Home() {
-  const { shop, counts, modal, events, installed, job, readiness, recheck, ingest } = useLoaderData<typeof loader>();
+  const { shop, counts, modal, events, installed, job, readiness, recheck, ingest, testMsg, testsLeft } = useLoaderData<typeof loader>();
   const ok = (n: number) => (n >= 0 ? String(n) : "unavailable");
   const known = shop !== "unknown shop";
   const scanShop = known ? shop : installed[0]?.shop ?? "";
@@ -84,6 +90,27 @@ export default function Home() {
           </p>
         )}
       </section>
+      {testMsg && (
+        <section className="r2ac-card" style={{ marginTop: 12 }}>
+          {testMsg.startsWith("deleted:") ? (
+            <p role="status" className="r2ac-ok" style={{ margin: 0 }}>
+              <small>Test reset done - removed product {decodeURIComponent(testMsg.slice(8))} from the index (your Shopify store is untouched). Now click “Scan existing catalog” and watch it come back below.</small>
+            </p>
+          ) : testMsg === "limit" ? (
+            <p role="alert" className="r2ac-err" style={{ margin: 0 }}>
+              <small>You have tried the maximum for testing - 2 test resets per browser. Clear cookies or ask the developer to reset.</small>
+            </p>
+          ) : testMsg === "empty" ? (
+            <p role="status" style={{ margin: 0 }}>
+              <small>Nothing to reset - every row is verified or the catalog is fully enriched. Save a new product to create fresh work.</small>
+            </p>
+          ) : (
+            <p role="alert" className="r2ac-err" style={{ margin: 0 }}>
+              <small>Test reset failed - try again.</small>
+            </p>
+          )}
+        </section>
+      )}
       <section className="r2ac-stats">
         <div className="r2ac-card">
           <h3>Video cache</h3>
@@ -150,6 +177,26 @@ export default function Home() {
             </>
           );
         })()}
+      </section>
+      <section className="r2ac-card" style={{ marginTop: 12 }}>
+        <h3>How to test</h3>
+        <p><small>New here? This shows the full pipeline working on your own store — no need to add products first:</small></p>
+        <ol style={{ margin: "0 0 8px", paddingLeft: 20 }}>
+          <li><small><strong>Reset:</strong> the button below deletes ONE product's AI summary from our index. Your Shopify products are never touched.</small></li>
+          <li><small><strong>Scan:</strong> click “Scan existing catalog” above. The scan spots the missing product and sends it for analysis.</small></li>
+          <li><small><strong>Watch:</strong> a new row appears under “Enrichment outcomes” as sent - outcome pending, then flips to enriched within minutes while the Video embeddings count climbs back by one.</small></li>
+        </ol>
+        {scanShop ? (
+          <Form method="post" action="/api/test-delete">
+            <input type="hidden" name="shop" value={scanShop} />
+            <button type="submit" className="btn btn-ghost" disabled={testsLeft <= 0}>
+              {testsLeft > 0 ? `Delete one entry (test reset - ${testsLeft} left)` : "Test resets used up"}
+            </button>
+          </Form>
+        ) : (
+          <p><small>Install a shop first to enable the test reset.</small></p>
+        )}
+        <p><small>2 test resets per browser. Verified (merchant-approved) rows are never deleted.</small></p>
       </section>
       <section className="r2ac-card" style={{ marginTop: 12 }}>
         <h3>Store readiness (webMCP)</h3>
