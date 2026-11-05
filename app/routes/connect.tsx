@@ -3,7 +3,7 @@ import { Form, useActionData, useLoaderData, useNavigation } from "@remix-run/re
 import { tagInstagram } from "~/lib/activation/instagram";
 import { humanizeCommerceError } from "~/lib/shopify/commerce-errors";
 import { db } from "~/lib/db";
-import { generateImage, type GenerateFailure, type GenerateSuccess, type ImageErrorCode, type ImageStyle } from "~/lib/image/generate";
+import { generateImage, PROMPT_VERSION, IMAGE_PROVIDER, type GenerateFailure, type GenerateSuccess, type ImageErrorCode, type ImageStyle } from "~/lib/image/generate";
 
 // Tag-a-reel workspace: reels left, products right, review table above Tag.
 // All selection is URL state (?reel ?product ?variant) so the review table
@@ -107,8 +107,10 @@ export async function loader({ request }: LoaderFunctionArgs) {
   if (productId) {
     try {
       const sql = db();
+      const shops = (await sql`SELECT shop FROM shops LIMIT 1`) as { shop: string }[];
+      const shop = shops[0]?.shop ?? "";
       const rows = (await sql`SELECT id, style, source_mode, output_url, created_at::text AS created_at
-        FROM generated_images WHERE product_id = ${productId}
+        FROM generated_images WHERE shop = ${shop} AND product_id = ${productId}
         ORDER BY created_at DESC LIMIT 12`) as {
         id: number; style: string; source_mode: string; output_url: string; created_at: string;
       }[];
@@ -179,6 +181,7 @@ export async function action({ request }: ActionFunctionArgs) {
 function genErrorStatus(code: ImageErrorCode): number {
   if (code === "no-keys") return 500;
   if (code === "rate-limit") return 429;
+  if (code === "provider-4xx") return 400;
   return 502;
 }
 function toGenResponse(res: GenerateSuccess | GenerateFailure) {
@@ -262,7 +265,7 @@ async function keepAction(form: FormData) {
     if (existing.length)
       return json({ intent: "keep" as const, ok: true as const, duplicate: true as const, outputUrl });
     await sql`INSERT INTO generated_images (shop, product_id, variant_id, style, prompt_version, source_mode, provider, output_url)
-      VALUES (${shop}, ${productId}, ${variantId}, ${style}, 'v1', ${sourceMode}, 'muse-image-1.0', ${outputUrl})`;
+      VALUES (${shop}, ${productId}, ${variantId}, ${style}, ${PROMPT_VERSION}, ${sourceMode}, ${IMAGE_PROVIDER}, ${outputUrl})`;
     return json({ intent: "keep" as const, ok: true as const, duplicate: false as const, outputUrl });
   } catch {
     return json({ intent: "keep" as const, ok: false as const, error: "Could not save this image — try again." }, { status: 500 });
@@ -563,8 +566,10 @@ export default function Connect() {
             {nav.state !== "idle" && <p role="status"><small>Generating your image — this can take up to a minute…</small></p>}
             {genResult?.ok && (
               <figure style={{ marginTop: 12 }}>
-                <img src={genResult.outputUrl} alt={`Generated ${genStyle} image of ${selProduct.title}`}
-                  loading="lazy" style={{ maxWidth: "100%", height: "auto", borderRadius: 8 }} />
+                <a href={genResult.outputUrl} target="_blank" rel="noreferrer" aria-label={`Open full-size ${genStyle} image of ${selProduct.title}`}>
+                  <img src={genResult.outputUrl} alt={`Generated ${genStyle} image of ${selProduct.title}`}
+                    loading="lazy" style={{ maxWidth: "100%", height: "auto", borderRadius: 8 }} />
+                </a>
                 <figcaption><small>{genStyle} · {genResult.sourceMode === "with-image" ? "matched to product photo" : "interpreted from product name"}</small></figcaption>
                 <a className="btn btn-ghost" href={genResult.outputUrl} {...dlProps(genResult.outputUrl, origin, downloadName(selProduct.title, genStyle, genResult.outputUrl))} aria-label={`Download ${genStyle} image of ${selProduct.title}`}>Download</a>
               </figure>
@@ -619,7 +624,9 @@ export default function Connect() {
                 <div role="list" style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
                   {genHistory.map((h) => (
                     <figure key={h.id} role="listitem" style={{ margin: 0, width: 120 }}>
-                      <img src={h.outputUrl} alt="" loading="lazy" style={{ width: 120, height: 120, objectFit: "cover", borderRadius: 8 }} />
+                      <a href={h.outputUrl} target="_blank" rel="noreferrer" aria-label={`Open full-size ${h.style} image`}>
+                        <img src={h.outputUrl} alt="" loading="lazy" style={{ width: 120, height: 120, objectFit: "cover", borderRadius: 8 }} />
+                      </a>
                       <figcaption><small><strong>{h.style}</strong> · {h.sourceMode} · {h.when}</small></figcaption>
                       <a className="btn btn-ghost" href={h.outputUrl} {...dlProps(h.outputUrl, origin, downloadName(selProduct.title, h.style, h.outputUrl))} aria-label={`Download ${h.style} image of ${selProduct.title}`}>Download</a>
                     </figure>

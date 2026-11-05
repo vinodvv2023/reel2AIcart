@@ -9,8 +9,9 @@ export type ImageStyle =
   | "ghost-mannequin" | "hanger" | "on-actor";
 export type SourceMode = "with-image" | "text-only";
 export type ImageErrorCode =
-  | "no-keys" | "rate-limit" | "content-filter" | "provider-5xx" | "timeout";
-const PROMPT_VERSION = "v1";
+  | "no-keys" | "rate-limit" | "content-filter" | "provider-4xx" | "provider-5xx" | "timeout";
+export const PROMPT_VERSION = "v1";
+export const IMAGE_PROVIDER = "muse-image-1.0";
 const STYLE_SCENES: Record<ImageStyle, string> = {
   "flat-lay": "clean top-down flat-lay on a seamless light backdrop, garment fully spread, no people",
   "folded-stack": "neat stack of multiple folded units, top-down three-quarter view, no people",
@@ -58,17 +59,17 @@ export async function generateImage(input: {
     const res = await fetch(imagesGenerationsUrl(), {
       method: "POST",
       headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ model: process.env.MUSE_IMAGE_MODEL ?? "muse-image-1.0", prompt, n: 1 }),
+      body: JSON.stringify({ model: process.env.MUSE_IMAGE_MODEL ?? IMAGE_PROVIDER, prompt, n: 1 }),
       signal: ctrl.signal,
     });
     if (res.status === 429)
       return { ok: false, error: { code: "rate-limit", message: "Image provider rate limit hit; try again shortly." } };
     if (!res.ok) {
       const body = await res.text().catch(() => "");
-      if (/content[_-]?filter|moderation|safety|blocked/i.test(body))
+      if (/content[\s_-]?filter|moderation|safety|blocked/i.test(body))
         return { ok: false, error: { code: "content-filter", message: "Provider refused the image request (content filter) - try a different photo or style." } };
       if (res.status >= 400 && res.status < 500)
-        return { ok: false, error: { code: "provider-5xx", message: `Image request rejected by the provider (status ${res.status}) - check the product details and try again.` } };
+        return { ok: false, error: { code: "provider-4xx", message: `Image request rejected by the provider (status ${res.status}) - check the product details and try again.` } };
       return { ok: false, error: { code: "provider-5xx", message: `Image provider error (status ${res.status}) - try again shortly.` } };
     }
     const json = (await res.json()) as { data?: ({ url?: string; b64_json?: string })[]; images?: string[] };
@@ -78,7 +79,7 @@ export async function generateImage(input: {
       await input.persist?.({
         shop: input.shop, productId: input.productId, variantId: input.variantId ?? "",
         style: input.style, promptVersion: PROMPT_VERSION, sourceMode,
-        provider: "muse-image-1.0", outputUrl,
+        provider: IMAGE_PROVIDER, outputUrl,
       });
     } catch { /* logging never breaks the response (connect convention) */ }
     return { ok: true, outputUrl, sourceMode };

@@ -6,7 +6,7 @@ import { loadService, withFetch, jsonBody } from "./helpers/route-harness.mjs";
 // Expected values come from the spec (issue #1): 6 styles, 5 error codes.
 const STYLES = ["flat-lay", "folded-stack", "single-folded", "ghost-mannequin", "hanger", "on-actor"];
 
-const { buildImagePrompt, generateImage, imagesGenerationsUrl } = loadService();
+const { buildImagePrompt, generateImage, imagesGenerationsUrl, PROMPT_VERSION, IMAGE_PROVIDER } = loadService();
 
 let savedEnv;
 beforeEach(() => {
@@ -56,6 +56,9 @@ describe("image service contract", () => {
     const cases = [
       [429, "busy", "rate-limit"],
       [400, "content-filter refusal", "content-filter"],
+      [400, "rejected by content filter policy", "content-filter"],
+      [400, "bad request", "provider-4xx"],
+      [422, "invalid params", "provider-4xx"],
       [500, "boom", "provider-5xx"],
     ];
     for (const [status, body, code] of cases) {
@@ -99,6 +102,9 @@ describe("image service contract", () => {
       [kept[0].shop, kept[0].productId, kept[0].variantId, kept[0].style, kept[0].promptVersion, kept[0].sourceMode],
       ["s", "1", "2", "flat-lay", "v1", "with-image"],
     );
+    assert.equal(PROMPT_VERSION, "v1");
+    assert.equal(IMAGE_PROVIDER, "muse-image-1.0");
+    assert.equal(kept[0].provider, IMAGE_PROVIDER);
   });
 
   it("never calls persist on failure and survives a persist throw", async () => {
