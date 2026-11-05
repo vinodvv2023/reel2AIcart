@@ -554,8 +554,10 @@ export default function Connect() {
               </Form>
               {products.map((p, i) => {
                 const on = String(p.id) === productId;
+                // Picking a product resets the style (refs #10 follow-up): a fresh
+                // pick starts with no style selected; `style: ""` drops the param.
                 return (
-                  <a key={p.id} href={qs({ ...keep, product: String(p.id), variant: "", pg: "1" }) + (p.variants.length > 1 ? "#pick" : "")}
+                  <a key={p.id} href={qs({ ...keep, product: String(p.id), variant: "", style: "", pg: "1" }) + (p.variants.length > 1 ? "#pick" : "")}
                     aria-current={on || undefined}
                     className={`r2ac-row ${i % 2 ? "r2ac-b" : "r2ac-a"}`}
                     style={{ textDecoration: "none", color: "inherit", border: on ? "2px solid #0f4c4a" : "2px solid transparent" }}>
