@@ -3,7 +3,7 @@ import { Form, useActionData, useLoaderData, useNavigation } from "@remix-run/re
 import { tagInstagram } from "~/lib/activation/instagram";
 import { humanizeCommerceError } from "~/lib/shopify/commerce-errors";
 import { db } from "~/lib/db";
-import { generateImage, type ImageStyle } from "~/lib/image/generate";
+import { generateImage, type GenerateFailure, type GenerateSuccess, type ImageErrorCode, type ImageStyle } from "~/lib/image/generate";
 
 // Tag-a-reel workspace: reels left, products right, review table above Tag.
 // All selection is URL state (?reel ?product ?variant) so the review table
@@ -149,6 +149,32 @@ export async function action({ request }: ActionFunctionArgs) {
   }
 }
 
+// T6 failure contract (refs #7): every ImageErrorCode maps to an HTTP status.
+// The inline merchant message comes from generateImage (T2) verbatim; every
+// path below returns json and never redirects, so reel/product/variant picks
+// stay intact via URL state.
+function genErrorStatus(code: ImageErrorCode): number {
+  if (code === "no-keys") return 500;
+  if (code === "rate-limit") return 429;
+  return 502;
+}
+function toGenResponse(res: GenerateSuccess | GenerateFailure) {
+  if (!res.ok)
+    return json({ intent: "generate" as const, ok: false as const, error: res.error.message }, { status: genErrorStatus(res.error.code) });
+  return json({ intent: "generate" as const, ok: true as const, outputUrl: res.outputUrl, sourceMode: res.sourceMode });
+}
+async function logGeneration(e: { shop: string; productId: string; variantId: string; style: string; outcome: "ok" | "failed"; cause: string }) {
+  try {
+    // Additive event log (shop, product, style, outcome, truncated cause);
+    // the durable audit row is the generated_images insert on success.
+    console.info(JSON.stringify({ event: "image-generation", ...e, cause: e.cause.slice(0, 300) }));
+  } catch {
+    // logging never breaks the generation response (logTag convention)
+  }
+}
+// In-flight generations by shop+product+variant+style for click coalescing.
+const inflightGen = new Map<string, Promise<GenerateSuccess | GenerateFailure>>();
+
 async function generateAction(form: FormData) {
   const productId = String(form.get("productId") ?? "").trim();
   const variantId = String(form.get("variantId") ?? "").trim();
@@ -168,7 +194,14 @@ async function generateAction(form: FormData) {
   } catch {
     // shop label is best-effort; generation still proceeds
   }
-  const res = await generateImage({
+  // One generation per explicit click: identical rapid POSTs (same
+  // shop+product+variant+style) share a single provider call. The submit
+  // button is also disabled while nav.state !== "idle" (server-state pattern,
+  // no client JS). No auto-generate on select, no polling loops.
+  const dedupeKey = [shop, productId, variantId, style].join("|");
+  const shared = inflightGen.get(dedupeKey);
+  if (shared) return toGenResponse(await shared);
+  const run = generateImage({
     shop, productId, variantId, title, variantTitle, referenceImageUrl, style,
     persist: async (r) => {
       const sql = db();
@@ -176,8 +209,16 @@ async function generateAction(form: FormData) {
         VALUES (${r.shop}, ${r.productId}, ${r.variantId}, ${r.style}, ${r.promptVersion}, ${r.sourceMode}, ${r.provider}, ${r.outputUrl})`;
     },
   });
-  if (!res.ok) return json({ intent: "generate" as const, ok: false as const, error: res.error.message }, { status: 502 });
-  return json({ intent: "generate" as const, ok: true as const, outputUrl: res.outputUrl, sourceMode: res.sourceMode });
+  inflightGen.set(dedupeKey, run);
+  try {
+    const res = await run;
+    await logGeneration({ shop, productId, variantId, style,
+      outcome: res.ok ? "ok" : "failed",
+      cause: res.ok ? "sourceMode=" + res.sourceMode : res.error.code + ": " + res.error.message });
+    return toGenResponse(res);
+  } finally {
+    inflightGen.delete(dedupeKey);
+  }
 }
 
 async function logTag(mediaId: string, variantId: string, status: string, detail: string) {
