@@ -62,7 +62,7 @@ export default function Scan() {
           job.scanned === 0 && job.enqueued === 0 ? (
             <p><small>Scan queued - waiting for the background worker's next pass (every few minutes). 0 checked so far means no pass has run yet, not that your catalog is empty - this page refreshes itself and the numbers appear once the pass starts.{job.wait_min >= 10 ? ` Queued ${job.wait_min} min ago, longer than usual - the worker may need a nudge.` : ""}</small></p>
           ) : (
-            <p><small>Scan in progress (this page refreshes itself) - checked {job.scanned} items so far, {job.enqueued} sent for image and video analysis{job.skipped_verified > 0 ? `, ${job.skipped_verified} need your review below` : ""}.</small></p>
+            <p><small>Scan {job.status} (this page refreshes itself) - checked {job.scanned} items so far, {job.enqueued} sent for image and video analysis{job.skipped_verified > 0 ? `, ${job.skipped_verified} need your review below` : ""}.</small></p>
           )
         ) : job.status === "done" ? (
           <>
