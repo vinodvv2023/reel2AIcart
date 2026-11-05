@@ -49,7 +49,7 @@ export async function generateImage(input: {
   persist?: (r: GeneratedImageRecord) => Promise<unknown>;
 }): Promise<GenerateSuccess | GenerateFailure> {
   const key = process.env.MODEL_API_KEY ?? "";
-  if (!key) return { ok: false, error: { code: "no-keys", message: "MODEL_API_KEY missing in server env." } };
+  if (!key) return { ok: false, error: { code: "no-keys", message: "MODEL_API_KEY missing in Vercel env - add it to enable image generation." } };
   const { prompt, sourceMode } = buildImagePrompt(input);
   const timeoutMs = input.timeoutMs ?? 60000;
   const ctrl = new AbortController();
@@ -66,8 +66,10 @@ export async function generateImage(input: {
     if (!res.ok) {
       const body = await res.text().catch(() => "");
       if (/content[_-]?filter|moderation|safety|blocked/i.test(body))
-        return { ok: false, error: { code: "content-filter", message: "Provider refused the image request (content filter)." } };
-      return { ok: false, error: { code: "provider-5xx", message: `Image provider error (status ${res.status}).` } };
+        return { ok: false, error: { code: "content-filter", message: "Provider refused the image request (content filter) - try a different photo or style." } };
+      if (res.status >= 400 && res.status < 500)
+        return { ok: false, error: { code: "provider-5xx", message: `Image request rejected by the provider (status ${res.status}) - check the product details and try again.` } };
+      return { ok: false, error: { code: "provider-5xx", message: `Image provider error (status ${res.status}) - try again shortly.` } };
     }
     const json = (await res.json()) as { data?: ({ url?: string; b64_json?: string })[]; images?: string[] };
     const outputUrl = json.data?.[0]?.url ?? json.data?.[0]?.b64_json ?? json.images?.[0] ?? "";
