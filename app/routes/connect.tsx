@@ -1,8 +1,9 @@
 import { json, type ActionFunctionArgs, type LoaderFunctionArgs } from "@remix-run/node";
-import { Form, useActionData, useLoaderData } from "@remix-run/react";
+import { Form, useActionData, useLoaderData, useNavigation } from "@remix-run/react";
 import { tagInstagram } from "~/lib/activation/instagram";
 import { humanizeCommerceError } from "~/lib/shopify/commerce-errors";
 import { db } from "~/lib/db";
+import { buildImageRequest, generateImage, PROMPT_VERSION, IMAGE_PROVIDER, type GenerateFailure, type GenerateSuccess, type ImageErrorCode, type ImageStyle } from "~/lib/image/generate";
 
 // Tag-a-reel workspace: reels left, products right, review table above Tag.
 // All selection is URL state (?reel ?product ?variant) so the review table
@@ -12,6 +13,8 @@ type Reel = { id: string; caption?: string; thumbnail_url?: string; media_url?: 
 type Variant = { id: number; title: string; price: string };
 type Product = { id: number; title: string; image?: string; variants: Variant[] };
 const PER_PAGE = 8;
+const STYLES = ["flat-lay", "folded-stack", "single-stack", "ghost-mannequin", "hanger", "on-actor"] as const;
+const isGenStyle = (s: string): s is ImageStyle => (STYLES as readonly string[]).includes(s);
 
 async function igMedia(): Promise<{ reels: Reel[]; error: string | null }> {
   const token = process.env.META_GRAPH_TOKEN ?? "";
@@ -28,25 +31,41 @@ async function igMedia(): Promise<{ reels: Reel[]; error: string | null }> {
   }
 }
 
-async function shopProducts(): Promise<{ products: Product[]; error: string | null }> {
+async function shopProducts(): Promise<{ products: Product[]; error: string | null; shopDomain: string }> {
   try {
     const sql = db();
     const shops = (await sql`SELECT shop, access_token FROM shops LIMIT 1`) as {
       shop: string;
       access_token: string;
     }[];
-    if (!shops.length) return { products: [], error: "No shop installed yet." };
+    if (!shops.length) return { products: [], error: "No shop installed yet.", shopDomain: "" };
     const r = await fetch(
       `https://${shops[0].shop}/admin/api/2026-10/products.json?limit=50&fields=id,title,image,variants`,
       { headers: { "X-Shopify-Access-Token": shops[0].access_token } },
     );
-    if (!r.ok) return { products: [], error: `Shopify API ${r.status} - re-authorize the store.` };
+    if (!r.ok) return { products: [], error: `Shopify API ${r.status} - re-authorize the store.`, shopDomain: shops[0].shop };
     const { products } = (await r.json()) as {
       products: (Omit<Product, "image"> & { image?: { src?: string } | null })[];
     };
-    return { products: products.map((p) => ({ ...p, image: p.image?.src })), error: null };
+    return { products: products.map((p) => ({ ...p, image: p.image?.src })), error: null, shopDomain: shops[0].shop };
   } catch {
-    return { products: [], error: "Shopify API unreachable." };
+    return { products: [], error: "Shopify API unreachable.", shopDomain: "" };
+  }
+}
+
+// Instagram profile handle for the "open on Instagram" link (viewers check).
+// Additive: failure hides the link, never breaks the page.
+async function igProfileName(): Promise<string> {
+  const token = process.env.META_GRAPH_TOKEN ?? "";
+  const ig = process.env.IG_USER_ID ?? "";
+  if (!token || !ig) return "";
+  try {
+    const r = await fetch(`https://graph.facebook.com/v19.0/${ig}?fields=username&access_token=${token}`);
+    if (!r.ok) return "";
+    const j = (await r.json()) as { username?: string };
+    return typeof j.username === "string" ? j.username : "";
+  } catch {
+    return "";
   }
 }
 
@@ -57,11 +76,14 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const productId = params.get("product") ?? "";
   const variantId = params.get("variant") ?? "";
   const reelId = params.get("reel") ?? "";
+  const rawStyle = params.get("style") ?? "";
+  const genStyle = isGenStyle(rawStyle) ? rawStyle : "";
   const pg = Math.max(1, parseInt(params.get("pg") ?? "1", 10) || 1);
   const rpg = Math.max(1, parseInt(params.get("rpg") ?? "1", 10) || 1);
-  const [{ reels, error: reelsError }, { products, error: productsError }] = await Promise.all([
+  const [{ reels, error: reelsError }, { products, error: productsError, shopDomain }, igUsername] = await Promise.all([
     igMedia(),
     shopProducts(),
+    igProfileName(),
   ]);
   const matchedReels = rq
     ? reels.filter(
@@ -97,8 +119,46 @@ export async function loader({ request }: LoaderFunctionArgs) {
   } catch {
     // history is additive; page works without it
   }
+  type GenHistory = { id: number; style: string; sourceMode: string; outputUrl: string; when: string };
+  let genHistory: GenHistory[] = [];
+  if (productId) {
+    try {
+      const sql = db();
+      const shops = (await sql`SELECT shop FROM shops LIMIT 1`) as { shop: string }[];
+      const shop = shops[0]?.shop ?? "";
+      const rows = (await sql`SELECT id, style, source_mode, output_url, created_at::text AS created_at
+        FROM generated_images WHERE shop = ${shop} AND product_id = ${productId}
+        ORDER BY created_at DESC LIMIT 12`) as {
+        id: number; style: string; source_mode: string; output_url: string; created_at: string;
+      }[];
+      genHistory = rows.map((r) => ({
+        id: r.id, style: r.style, sourceMode: r.source_mode, outputUrl: r.output_url,
+        when: r.created_at.slice(0, 16).replace("T", " "),
+      }));
+    } catch {
+      // history is additive; page works without it
+    }
+  }
+  // Prompt & request preview (refs #10): the prompt is deterministic from the
+  // pick, so the disclosure renders as soon as a style is selected — before
+  // anything is generated. Same builder the generate action uses, so preview
+  // and actual request can never drift apart.
+  const promptPreview = selProduct && genStyle ? (() => {
+    const req = buildImageRequest({
+      title: selProduct.title, variantTitle: selVariant?.title ?? "",
+      referenceImageUrl: selProduct.image ?? "", style: genStyle,
+      // Preview assumes the default (wrinkle-free on); unchecking before
+      // generating changes the actual prompt, shown post-generation.
+      wrinkleFree: true,
+    });
+    return {
+      prompt: req.prompt, endpoint: req.endpoint, model: req.model,
+      referenceAttached: req.referenceAttached, requestBody: req.body,
+    };
+  })() : null;
   return json({
     hint: humanizeCommerceError("{{IE_30010}}"),
+    origin: new URL(request.url).origin,
     ig: Boolean(process.env.META_GRAPH_TOKEN && process.env.IG_USER_ID),
     reels: matchedReels.slice((rPage - 1) * PER_PAGE, rPage * PER_PAGE),
     reelsError,
@@ -115,31 +175,241 @@ export async function loader({ request }: LoaderFunctionArgs) {
     productId,
     variantId: effVariant,
     reelId,
+    genStyle,
     selReel,
     selProduct,
     selVariant,
     taggedHere,
+    genHistory,
+    promptPreview,
+    igUsername,
+    shopDomain,
   });
 }
 
 export async function action({ request }: ActionFunctionArgs) {
   const form = await request.formData();
+  const intent = String(form.get("intent") ?? "tag");
+  if (intent === "generate") return generateAction(form);
+  if (intent === "keep") return keepAction(form);
+  if (intent === "export") return exportAction(form);
   const mediaId = String(form.get("mediaId") ?? "").trim();
   const variantId = String(form.get("variantId") ?? "").trim();
   if (!mediaId || !variantId)
-    return json({ ok: false as const, error: "Pick a reel, product and variant above." }, { status: 400 });
+    return json({ intent: "tag" as const, ok: false as const, error: "Pick a reel, product and variant above." }, { status: 400 });
   const token = process.env.META_GRAPH_TOKEN ?? "";
   if (!token)
-    return json({ ok: false as const, error: "META_GRAPH_TOKEN missing in Vercel env." }, { status: 500 });
+    return json({ intent: "tag" as const, ok: false as const, error: "META_GRAPH_TOKEN missing in Vercel env." }, { status: 500 });
   try {
     await tagInstagram(mediaId, variantId, token);
     await logTag(mediaId, variantId, "ok", "");
-    return json({ ok: true as const, mediaId });
+    return json({ intent: "tag" as const, ok: true as const, mediaId });
   } catch (e) {
     const error = e instanceof Error ? e.message : "Tagging failed.";
     await logTag(mediaId, variantId, "failed", error);
-    return json({ ok: false as const, error });
+    return json({ intent: "tag" as const, ok: false as const, error });
   }
+}
+
+// T6 failure contract (refs #7): every ImageErrorCode maps to an HTTP status.
+// The inline merchant message comes from generateImage (T2) verbatim; every
+// path below returns json and never redirects, so reel/product/variant picks
+// stay intact via URL state.
+function genErrorStatus(code: ImageErrorCode): number {
+  if (code === "no-keys") return 500;
+  if (code === "rate-limit") return 429;
+  if (code === "provider-4xx") return 400;
+  return 502;
+}
+function toGenResponse(res: GenerateSuccess | GenerateFailure) {
+  if (!res.ok)
+    return json({
+      intent: "generate" as const, ok: false as const, error: res.error.message,
+      detail: res.error.detail ?? "",
+    }, { status: genErrorStatus(res.error.code) });
+  // Prompt + request shape ride along for the preview-time <details>
+  // disclosure (transparency only — no secret material: the Bearer key never
+  // leaves the server and is not part of requestBody).
+  return json({
+    intent: "generate" as const, ok: true as const, outputUrl: res.outputUrl,
+    sourceMode: res.sourceMode, prompt: res.prompt, endpoint: res.endpoint,
+    model: res.model, referenceAttached: res.referenceAttached,
+    requestBody: res.requestBody, wrinkleFree: res.wrinkleFree,
+  });
+}
+async function logGeneration(e: { shop: string; productId: string; variantId: string; style: string; outcome: "ok" | "failed"; cause: string }) {
+  try {
+    // Additive event log (shop, product, style, outcome, truncated cause);
+    // the durable audit row is the generated_images insert on success.
+    console.info(JSON.stringify({ event: "image-generation", ...e, cause: e.cause.slice(0, 300) }));
+  } catch {
+    // logging never breaks the generation response (logTag convention)
+  }
+}
+// In-flight generations by shop+product+variant+style for click coalescing.
+const inflightGen = new Map<string, Promise<GenerateSuccess | GenerateFailure>>();
+
+async function generateAction(form: FormData) {
+  const productId = String(form.get("productId") ?? "").trim();
+  const variantId = String(form.get("variantId") ?? "").trim();
+  const style = String(form.get("style") ?? "").trim();
+  if (!productId)
+    return json({ intent: "generate" as const, ok: false as const, error: "Pick a product above first, then choose a style and generate.", detail: "" }, { status: 400 });
+  if (!isGenStyle(style))
+    return json({ intent: "generate" as const, ok: false as const, error: "Pick one of the 6 styles above, then generate.", detail: "" }, { status: 400 });
+  const title = String(form.get("productTitle") ?? "").trim() || `Product ${productId}`;
+  const variantTitle = String(form.get("variantTitle") ?? "").trim();
+  const referenceImageUrl = String(form.get("referenceImageUrl") ?? "").trim();
+  // Flat-lay finish toggle: checked checkbox posts "yes"; unchecked posts
+  // nothing. Only meaningful for flat-lay — the service ignores it otherwise.
+  const wrinkleFree = String(form.get("wrinkleFree") ?? "") === "yes";
+  let shop = "";
+  try {
+    const sql = db();
+    const shops = (await sql`SELECT shop FROM shops LIMIT 1`) as { shop: string }[];
+    shop = shops[0]?.shop ?? "";
+  } catch {
+    // shop label is best-effort; generation still proceeds
+  }
+  // One generation per explicit click: identical rapid POSTs (same
+  // shop+product+variant+style) share a single provider call. The submit
+  // button is also disabled while nav.state !== "idle" (server-state pattern,
+  // no client JS). No auto-generate on select, no polling loops.
+  const dedupeKey = [shop, productId, variantId, style].join("|");
+  const shared = inflightGen.get(dedupeKey);
+  if (shared) return toGenResponse(await shared);
+  const run = generateImage({
+    shop, productId, variantId, title, variantTitle, referenceImageUrl, style, wrinkleFree,
+  });
+  inflightGen.set(dedupeKey, run);
+  try {
+    const res = await run;
+    await logGeneration({ shop, productId, variantId, style,
+      outcome: res.ok ? "ok" : "failed",
+      cause: res.ok ? "sourceMode=" + res.sourceMode
+        : res.error.code + ": " + res.error.message + (res.error.detail ? " | " + res.error.detail : "") });
+    return toGenResponse(res);
+  } finally {
+    inflightGen.delete(dedupeKey);
+  }
+}
+
+// T4 (refs #6): keep persists the preview; discard is a plain GET reload so it
+// writes nothing. Double-submit guard: existence check before insert — exactly
+// one record per accept. Never throws to UI (additive convention).
+async function keepAction(form: FormData) {
+  const productId = String(form.get("productId") ?? "").trim();
+  const variantId = String(form.get("variantId") ?? "").trim();
+  const style = String(form.get("style") ?? "").trim();
+  const outputUrl = String(form.get("outputUrl") ?? "").trim();
+  const sourceMode = String(form.get("sourceMode") ?? "").trim();
+  if (!productId || !isGenStyle(style) || !outputUrl)
+    return json({ intent: "keep" as const, ok: false as const, error: "Nothing to keep — generate an image first." }, { status: 400 });
+  // outputUrl is a data: URI straight from the provider (b64_json wrapped) or
+  // an https URL. Data URIs round-trip through the keep form, so the cap is
+  // the platform POST-body budget, not the old 4000-char URL heuristic.
+  const isDataUri = outputUrl.startsWith("data:image/");
+  if ((!isDataUri && !/^https?:\/\//i.test(outputUrl)) || (sourceMode !== "with-image" && sourceMode !== "text-only"))
+    return json({ intent: "keep" as const, ok: false as const, error: "Kept image looks invalid — regenerate instead." }, { status: 400 });
+  if (outputUrl.length > 4_500_000)
+    return json({ intent: "keep" as const, ok: false as const, error: "Image too large to keep — regenerate, then push to Shopify Files." }, { status: 400 });
+  try {
+    const sql = db();
+    const shops = (await sql`SELECT shop FROM shops LIMIT 1`) as { shop: string }[];
+    const shop = shops[0]?.shop ?? "";
+    const existing = (await sql`SELECT id FROM generated_images
+      WHERE shop = ${shop} AND product_id = ${productId} AND variant_id = ${variantId}
+      AND style = ${style} AND output_url = ${outputUrl} LIMIT 1`) as { id: number }[];
+    if (existing.length)
+      return json({ intent: "keep" as const, ok: true as const, duplicate: true as const, outputUrl });
+    await sql`INSERT INTO generated_images (shop, product_id, variant_id, style, prompt_version, source_mode, provider, output_url)
+      VALUES (${shop}, ${productId}, ${variantId}, ${style}, ${PROMPT_VERSION}, ${sourceMode}, ${IMAGE_PROVIDER}, ${outputUrl})`;
+    return json({ intent: "keep" as const, ok: true as const, duplicate: false as const, outputUrl });
+  } catch {
+    return json({ intent: "keep" as const, ok: false as const, error: "Could not save this image — try again." }, { status: 500 });
+  }
+}
+
+// T5 (refs #2): second explicit POST — uploads the kept image to Shopify
+// Files behind a server-validated confirm checkbox. Never automatic, never
+// touches the live product image; reports the Files URL inline.
+async function exportAction(form: FormData) {
+  const productId = String(form.get("productId") ?? "").trim();
+  const style = String(form.get("style") ?? "").trim();
+  const outputUrl = String(form.get("outputUrl") ?? "").trim();
+  const title = String(form.get("productTitle") ?? "").trim() || `Product ${productId}`;
+  if (String(form.get("confirm") ?? "") !== "yes")
+    return json({ intent: "export" as const, ok: false as const, error: "Tick the confirmation box to push a copy to Shopify Files." }, { status: 400 });
+  if (!productId || !isGenStyle(style) || !outputUrl)
+    return json({ intent: "export" as const, ok: false as const, error: "Nothing to export — keep an image first." }, { status: 400 });
+  if (outputUrl.length > 4_500_000)
+    return json({ intent: "export" as const, ok: false as const, error: "Kept image looks invalid — regenerate instead." }, { status: 400 });
+  try {
+    const sql = db();
+    const shops = (await sql`SELECT shop, access_token FROM shops LIMIT 1`) as { shop: string; access_token: string }[];
+    if (!shops.length)
+      return json({ intent: "export" as const, ok: false as const, error: "No shop installed yet." }, { status: 500 });
+    const { bytes, mime } = await fetchImageBytes(outputUrl);
+    const filesUrl = await uploadBytesToFiles(shops[0].shop, shops[0].access_token, bytes, mime, downloadName(title, style, outputUrl));
+    // Upgrade the stored row to the durable Files URL so history, downloads
+    // and future exports use the CDN copy (best-effort; export already won).
+    try {
+      await sql`UPDATE generated_images SET output_url = ${filesUrl}
+        WHERE shop = ${shops[0].shop} AND product_id = ${productId} AND style = ${style} AND output_url = ${outputUrl}`;
+    } catch {
+      // history keeps the previous URL; page still works (additive convention)
+    }
+    return json({ intent: "export" as const, ok: true as const, filesUrl });
+  } catch (e) {
+    return json({ intent: "export" as const, ok: false as const, error: e instanceof Error ? e.message : "Files export failed — try again." }, { status: 502 });
+  }
+}
+
+// Image bytes from either source we persist: provider data: URIs (decoded
+// locally — no fetch round-trip) or https URLs (fetched like before).
+function parseDataImageUri(uri: string): { mime: string; bytes: Uint8Array<ArrayBuffer> } {
+  const m = /^data:(image\/[a-z+]+);base64,([A-Za-z0-9+/=]+)$/.exec(uri);
+  if (!m) throw new Error("Kept image is not a valid image data URL — regenerate instead.");
+  const bytes = Uint8Array.from(atob(m[2]), (c) => c.charCodeAt(0));
+  if (bytes.length > 20_000_000) throw new Error("Image too large for Files (20 MB cap) — regenerate instead.");
+  return { mime: m[1], bytes };
+}
+async function fetchImageBytes(url: string): Promise<{ mime: string; bytes: Uint8Array<ArrayBuffer> }> {
+  if (url.startsWith("data:")) return parseDataImageUri(url);
+  const img = await fetch(url);
+  if (!img.ok) throw new Error(`Could not fetch the kept image (status ${img.status}) — try again.`);
+  const mime = (img.headers.get("content-type") ?? "").split(";")[0].trim() || "image/png";
+  if (!mime.startsWith("image/")) throw new Error("Kept URL is not an image — regenerate instead.");
+  const bytes = new Uint8Array(await img.arrayBuffer());
+  if (bytes.length > 20_000_000) throw new Error("Image too large for Files (20 MB cap) — regenerate instead.");
+  return { mime, bytes };
+}
+
+// T5 staged upload then fileCreate — Files only. Reuses the shops-token
+// pattern from shopProducts; no product-image mutation path exists here.
+async function uploadBytesToFiles(shop: string, token: string, bytes: Uint8Array<ArrayBuffer>, mime: string, filename: string): Promise<string> {
+  const gql = `https://${shop}/admin/api/2026-10/graphql.json`;
+  const headers = { "X-Shopify-Access-Token": token, "Content-Type": "application/json" };
+  const staged = (await (await fetch(gql, { method: "POST", headers,
+    body: JSON.stringify({ query: `mutation($input:[StagedUploadInput!]!){stagedUploadsCreate(input:$input){stagedTargets{url resourceUrl parameters{name value}}userErrors{message}}}`,
+      variables: { input: [{ filename, mimeType: mime, resource: "FILE", fileSize: String(bytes.length), httpMethod: "PUT" }] } }),
+  })).json()) as { data?: { stagedUploadsCreate?: { stagedTargets?: { url: string; resourceUrl: string; parameters?: { name: string; value: string }[] }[]; userErrors?: { message: string }[] } } };
+  const target = staged.data?.stagedUploadsCreate?.stagedTargets?.[0];
+  if (!target) throw new Error(staged.data?.stagedUploadsCreate?.userErrors?.[0]?.message
+    ? `Shopify Files refused the upload: ${staged.data.stagedUploadsCreate.userErrors[0].message}` : "Shopify Files refused the upload — try again.");
+  const putHeaders: Record<string, string> = { "Content-Type": mime };
+  for (const p of target.parameters ?? []) putHeaders[p.name] = p.value;
+  const put = await fetch(target.url, { method: "PUT", headers: putHeaders, body: bytes });
+  if (!put.ok) throw new Error(`Shopify Files upload failed (status ${put.status}) — try again.`);
+  const created = (await (await fetch(gql, { method: "POST", headers,
+    body: JSON.stringify({ query: `mutation($files:[FileCreateInput!]!){fileCreate(files:$files){files{... on GenericFile{id url}... on MediaImage{id image{url}}}userErrors{message}}}`,
+      variables: { files: [{ originalSource: target.resourceUrl, contentType: "IMAGE" }] } }),
+  })).json()) as { data?: { fileCreate?: { files?: ({ url?: string; image?: { url?: string } })[]; userErrors?: { message: string }[] } } };
+  const file = created.data?.fileCreate?.files?.[0];
+  const filesUrl = file?.url ?? file?.image?.url;
+  if (!filesUrl) throw new Error(created.data?.fileCreate?.userErrors?.[0]?.message
+    ? `Shopify Files rejected the file: ${created.data.fileCreate.userErrors[0].message}` : "Shopify Files rejected the file — try again.");
+  return filesUrl;
 }
 
 async function logTag(mediaId: string, variantId: string, status: string, detail: string) {
@@ -156,12 +426,54 @@ async function logTag(mediaId: string, variantId: string, status: string, detail
 const qs = (p: Record<string, string>) =>
   `?${Object.entries(p).filter(([, v]) => v).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join("&")}`;
 
+// T5 (refs #2): `{product}-{style}` filename; the persisted output URL is the
+// download source (no extra backend seam). Same-origin anchors download
+// directly; cross-origin degrades to open-in-new-tab (download attr would be
+// ignored cross-origin, so it is omitted there).
+function downloadName(title: string, style: string, url: string): string {
+  const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "product";
+  // Data URIs carry no file extension — read the MIME type instead.
+  const dataMime = /^data:image\/([a-z+]+);/i.exec(url)?.[1]?.toLowerCase().replace("jpeg", "jpg");
+  const ext = dataMime ?? (/\.(png|jpe?g|webp|gif|avif)([?#]|$)/i.exec(url)?.[1] ?? "png").toLowerCase().replace("jpeg", "jpg");
+  return `${slug}-${style}.${ext}`;
+}
+function dlProps(url: string, origin: string, name: string): { download?: string; target?: "_blank"; rel?: string } {
+  // Data URIs download from the document itself, so the download attribute
+  // works regardless of origin. Same-origin https also downloads directly;
+  // cross-origin degrades to open-in-new-tab (download would be ignored).
+  if (url.startsWith("data:image/")) return { download: name };
+  try {
+    if (new URL(url, origin).origin === origin) return { download: name };
+  } catch {
+    // unparseable URL — fall through to open-in-new-tab
+  }
+  return { target: "_blank", rel: "noreferrer" };
+}
+
 export default function Connect() {
   const { hint, ig, reels, reelsError, rTotal, rPage, rPages, products, productsError, total, page, pages,
-    q, rq, productId, variantId, reelId, selReel, selProduct, selVariant, taggedHere } =
+    q, rq, productId, variantId, reelId, genStyle, selReel, selProduct, selVariant, taggedHere, genHistory, promptPreview, igUsername, shopDomain, origin } =
     useLoaderData<typeof loader>();
   const result = useActionData<typeof action>();
-  const keep = { q, rq, product: productId, variant: variantId, reel: reelId };
+  const nav = useNavigation();
+  const tagResult = result?.intent === "tag" ? result : null;
+  const genResult = result?.intent === "generate" ? result : null;
+  // Fresh preview wins; otherwise the loader's pre-generation preview (same
+  // builder, so identical for identical picks).
+  const detailData = genResult?.ok
+    ? {
+        prompt: genResult.prompt, endpoint: genResult.endpoint, model: genResult.model,
+        referenceAttached: genResult.referenceAttached, requestBody: genResult.requestBody,
+      }
+    : promptPreview;
+  const keepResult = result?.intent === "keep" ? result : null;
+  const exportResult = result?.intent === "export" ? result : null;
+  const exportKept = keepResult?.ok ? { style: genStyle, outputUrl: keepResult.outputUrl } : genHistory.find((h) => h.style === genStyle);
+  const hasStyleHistory = genStyle ? genHistory.some((h) => h.style === genStyle) : false;
+  // keep carries page state (pg/rpg) so picks, styles and variants never kick
+  // the user back to page 1 (refs #10 follow-up). Pagers override pg/rpg
+  // explicitly; fresh searches omit them via the search forms and reset to 1.
+  const keep = { q, rq, product: productId, variant: variantId, reel: reelId, style: genStyle, pg: String(page), rpg: String(rPage) };
   const complete = Boolean(selReel && selVariant);
   return (
     <main className="r2ac-wrap">
@@ -194,6 +506,9 @@ export default function Connect() {
       <div className="r2ac-cols">
         <section className="r2ac-card" aria-label="Instagram reels">
           <h2>1. Pick a reel</h2>
+          {igUsername && (
+            <p><small><a href={`https://www.instagram.com/${igUsername}/`} target="_blank" rel="noreferrer">Open @{igUsername} on Instagram</a> to check the reels</small></p>
+          )}
           {reelsError ? (
             <p role="alert" className="r2ac-err">{reelsError}</p>
           ) : (
@@ -255,6 +570,9 @@ export default function Connect() {
 
         <section className="r2ac-card" aria-label="Shopify products">
           <h2>2. Pick a product</h2>
+          {shopDomain && (
+            <p><small><a href={`https://${shopDomain}`} target="_blank" rel="noreferrer">Open {shopDomain} on Shopify</a> to check the catalog</small></p>
+          )}
           {productsError ? (
             <p role="alert" className="r2ac-err">{productsError}</p>
           ) : (
@@ -270,8 +588,10 @@ export default function Connect() {
               </Form>
               {products.map((p, i) => {
                 const on = String(p.id) === productId;
+                // Picking a product resets the style (refs #10 follow-up): a fresh
+                // pick starts with no style selected; `style: ""` drops the param.
                 return (
-                  <a key={p.id} href={qs({ ...keep, product: String(p.id), variant: "", pg: "1" }) + (p.variants.length > 1 ? "#pick" : "")}
+                  <a key={p.id} href={qs({ ...keep, product: String(p.id), variant: "", style: "" }) + (p.variants.length > 1 ? "#pick" : "")}
                     aria-current={on || undefined}
                     className={`r2ac-row ${i % 2 ? "r2ac-b" : "r2ac-a"}`}
                     style={{ textDecoration: "none", color: "inherit", border: on ? "2px solid #0f4c4a" : "2px solid transparent" }}>
@@ -320,8 +640,159 @@ export default function Connect() {
         </section>
       </div>
 
+      <section className="r2ac-card" style={{ marginTop: 20 }} aria-label="Generate product image">
+        <h2>3. Generate product image <small>(optional)</small></h2>
+        {!selProduct ? (
+          <p><small>Pick a product above to unlock image generation.</small></p>
+        ) : (
+          <>
+            <p><small>Styles keep your picks — switching never loses ?reel ?product ?variant. Generation can take up to a minute.</small></p>
+            <div role="list" aria-label="Image styles" style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 8 }}>
+              {STYLES.map((s) => (
+                <a key={s} role="listitem" href={qs({ ...keep, style: s })}
+                  aria-current={s === genStyle || undefined} className="btn btn-ghost"
+                  style={s === genStyle ? { border: "2px solid #0f4c4a" } : undefined}>
+                  {s === genStyle ? "✓ " : ""}{s}
+                </a>
+              ))}
+            </div>
+            <Form method="post" aria-label="Generate product image" style={{ marginTop: 12 }}>
+              <input type="hidden" name="intent" value="generate" />
+              <input type="hidden" name="productId" value={productId} />
+              <input type="hidden" name="variantId" value={variantId} />
+              <input type="hidden" name="style" value={genStyle} />
+              <input type="hidden" name="productTitle" value={selProduct.title} />
+              <input type="hidden" name="variantTitle" value={selVariant?.title ?? ""} />
+              <input type="hidden" name="referenceImageUrl" value={selProduct.image ?? ""} />
+              {genStyle === "flat-lay" && (
+                <p style={{ margin: "8px 0 0" }}>
+                  <label>
+                    <input type="checkbox" name="wrinkleFree" value="yes"
+                      defaultChecked={genResult?.ok ? genResult.wrinkleFree : true} />{" "}
+                    <small>Wrinkle free</small>
+                  </label>
+                </p>
+              )}
+              <button type="submit" className="btn btn-primary" disabled={!genStyle || nav.state !== "idle"}>
+                {nav.state !== "idle" ? "Generating…" : genResult?.ok || hasStyleHistory ? "Regenerate image" : "Generate image"}
+              </button>
+              {!genStyle && <p><small>Pick a style above to enable generation.</small></p>}
+            </Form>
+            {nav.state !== "idle" && <p role="status"><small>Generating your image — this can take up to a minute…</small></p>}
+            {genResult?.ok && (
+              <figure style={{ marginTop: 12 }}>
+                <a href={genResult.outputUrl} target="_blank" rel="noreferrer" aria-label={`Open full-size ${genStyle} image of ${selProduct.title}`}>
+                  <img src={genResult.outputUrl} alt={`Generated ${genStyle} image of ${selProduct.title}`}
+                    loading="lazy" style={{ maxWidth: "100%", height: "auto", borderRadius: 8 }} />
+                </a>
+                <figcaption><small>{genStyle} · {genResult.sourceMode === "with-image" ? "matched to product photo" : "interpreted from product name"}</small></figcaption>
+                <a className="btn btn-ghost" href={genResult.outputUrl} {...dlProps(genResult.outputUrl, origin, downloadName(selProduct.title, genStyle, genResult.outputUrl))} aria-label={`Download ${genStyle} image of ${selProduct.title}`}>Download</a>
+              </figure>
+            )}
+            {detailData && (
+              <details style={{ marginTop: 8 }}>
+                <summary><small>Prompt &amp; request details{genResult?.ok ? "" : " (preview — nothing generated yet)"}</small></summary>
+                <p><small>
+                  Style <strong>{genStyle}</strong> · model <code>{detailData.model}</code> ·
+                  endpoint <code>POST /v1/images/{detailData.endpoint}</code> ·{" "}
+                  {detailData.referenceAttached ? "reference product photo attached" : "no reference photo (text-only)"} ·
+                  auth via server-only Bearer key (never shown).
+                </small></p>
+                {detailData.referenceAttached && selProduct.image && (
+                  <p><small>Reference: </small>
+                    <a href={selProduct.image} target="_blank" rel="noreferrer">
+                      <small>{selProduct.image.length > 90 ? selProduct.image.slice(0, 90) + "…" : selProduct.image}</small>
+                    </a>
+                  </p>
+                )}
+                <p><small>Prompt{genResult?.ok ? " sent" : " to be sent"}:</small></p>
+                <pre style={{ whiteSpace: "pre-wrap", fontSize: 12 }}>{detailData.prompt}</pre>
+                <p><small>Request body{genResult?.ok ? " sent" : " to be sent"} (auth header omitted):</small></p>
+                <pre style={{ whiteSpace: "pre-wrap", fontSize: 12 }}>{JSON.stringify(detailData.requestBody, null, 2)}</pre>
+              </details>
+            )}
+            {genResult?.ok && !keepResult?.ok && (
+              <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                <Form method="post" aria-label="Keep generated image">
+                  <input type="hidden" name="intent" value="keep" />
+                  <input type="hidden" name="productId" value={productId} />
+                  <input type="hidden" name="variantId" value={variantId} />
+                  <input type="hidden" name="style" value={genStyle} />
+                  <input type="hidden" name="outputUrl" value={genResult.outputUrl} />
+                  <input type="hidden" name="sourceMode" value={genResult.sourceMode} />
+                  <button type="submit" className="btn btn-primary" disabled={nav.state !== "idle"}>Keep</button>
+                </Form>
+                <a className="btn btn-ghost" href={qs(keep)}>Discard</a>
+              </div>
+            )}
+            {keepResult && (
+              <p role={keepResult.ok ? "status" : "alert"} className={keepResult.ok ? "r2ac-ok" : "r2ac-err"}>
+                {keepResult.ok
+                  ? keepResult.duplicate ? "Already kept — exactly one record saved." : "Kept — it now appears in history below."
+                  : keepResult.error}
+              </p>
+            )}
+            {exportKept && (
+              <Form method="post" aria-label="Push kept image to Shopify Files" style={{ marginTop: 8 }}>
+                <input type="hidden" name="intent" value="export" />
+                <input type="hidden" name="productId" value={productId} />
+                <input type="hidden" name="style" value={exportKept.style} />
+                <input type="hidden" name="productTitle" value={selProduct.title} />
+                <input type="hidden" name="outputUrl" value={exportKept.outputUrl} />
+                <label style={{ display: "block", marginTop: 4 }}>
+                  <input type="checkbox" name="confirm" value="yes" required />{" "}
+                  <small>Push a copy to Shopify Files (never changes the live product image)</small>
+                </label>
+                <button type="submit" className="btn btn-ghost" disabled={nav.state !== "idle"} style={{ marginTop: 4 }}>
+                  Push to Shopify Files
+                </button>
+              </Form>
+            )}
+            {exportResult && (
+              <p role={exportResult.ok ? "status" : "alert"} className={exportResult.ok ? "r2ac-ok" : "r2ac-err"}>
+                {exportResult.ok
+                  ? <><a href={exportResult.filesUrl} target="_blank" rel="noreferrer">Open in Shopify Files</a> — catalog image untouched.</>
+                  : exportResult.error}
+              </p>
+            )}
+            {genHistory.length > 0 && (
+              <div style={{ marginTop: 12 }} aria-label="Generated image history">
+                <h3>History <small>(newest first)</small></h3>
+                <div role="list" style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                  {genHistory.map((h) => (
+                    <figure key={h.id} role="listitem" style={{ margin: 0, width: 120 }}>
+                      <a href={h.outputUrl} target="_blank" rel="noreferrer" aria-label={`Open full-size ${h.style} image`}>
+                        <img src={h.outputUrl} alt="" loading="lazy" style={{ width: 120, height: 120, objectFit: "cover", borderRadius: 8 }} />
+                      </a>
+                      <figcaption><small><strong>{h.style}</strong> · {h.sourceMode} · {h.when}</small></figcaption>
+                      <a className="btn btn-ghost" href={h.outputUrl} {...dlProps(h.outputUrl, origin, downloadName(selProduct.title, h.style, h.outputUrl))} aria-label={`Download ${h.style} image of ${selProduct.title}`}>Download</a>
+                    </figure>
+                  ))}
+                </div>
+              </div>
+            )}
+          </>
+        )}
+          {genResult && !genResult.ok && (
+            <>
+              <p role="alert" className="r2ac-err">{genResult.error}</p>
+              <details style={{ marginTop: 8 }}>
+                <summary><small>Why did this fail? (provider response{detailData ? " + request sent" : ""})</small></summary>
+                <p><small>Provider said:</small></p>
+                <pre style={{ whiteSpace: "pre-wrap", fontSize: 12 }}>{genResult.detail || "(no further detail from the provider)"}</pre>
+                {detailData && (
+                  <>
+                    <p><small>Request that was sent (auth header omitted):</small></p>
+                    <pre style={{ whiteSpace: "pre-wrap", fontSize: 12 }}>POST /v1/images/{detailData.endpoint}{"\n"}{JSON.stringify(detailData.requestBody, null, 2)}</pre>
+                  </>
+                )}
+              </details>
+            </>
+          )}
+      </section>
+
       <section className="r2ac-card" style={{ marginTop: 20 }} aria-label="Review and tag">
-        <h2>3. Review and tag</h2>
+        <h2>4. Review and tag</h2>
         {(selReel || selProduct || selVariant) ? (
           <>
             <table style={{ borderCollapse: "collapse", width: "100%", marginTop: 8 }}>
@@ -355,6 +826,7 @@ export default function Connect() {
         ) : null}
         {complete ? (
           <Form method="post" aria-label="Tag products on the selected reel" style={{ marginTop: 12 }}>
+            <input type="hidden" name="intent" value="tag" />
             <input type="hidden" name="mediaId" value={reelId} />
             <input type="hidden" name="variantId" value={variantId} />
             <button type="submit" className="btn btn-primary">Tag products on reel</button>
@@ -364,9 +836,9 @@ export default function Connect() {
             <button type="button" className="btn btn-primary" disabled>Pick a reel, product and variant above</button>
           </p>
         )}
-        {result && (
-          <p role={result.ok ? "status" : "alert"} className={result.ok ? "r2ac-ok" : "r2ac-err"}>
-            {result.ok ? `Tagged reel ${result.mediaId} - check the reel on mobile for View Products.` : result.error}
+        {tagResult && (
+          <p role={tagResult.ok ? "status" : "alert"} className={tagResult.ok ? "r2ac-ok" : "r2ac-err"}>
+            {tagResult.ok ? `Tagged reel ${tagResult.mediaId} - check the reel on mobile for View Products.` : tagResult.error}
           </p>
         )}
       </section>
