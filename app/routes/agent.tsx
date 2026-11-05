@@ -148,7 +148,7 @@ export default function Agent() {
           <Form method="get" aria-label="Search the catalog">
             <input type="hidden" name="tab" value="search" />
             <label htmlFor="sq"><strong>Search products</strong></label><br />
-            <input id="sq" name="q" type="search" defaultValue={sq} placeholder="e.g. ballerina" style={{ ...inputStyle, width: "min(420px,100%)" }} />{" "}
+            <input id="sq" name="q" type="search" data-voice-input="" defaultValue={sq} placeholder="e.g. ballerina" style={{ ...inputStyle, width: "min(420px,100%)" }} />{" "}
             <button type="submit" style={{ borderRadius: 999, padding: "10px 18px", fontWeight: 600, fontSize: 15, cursor: "pointer", background: "#0f4c4a", color: "#fff", border: "1px solid transparent" }}>Search</button>
           </Form>
           <div style={{ display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fit,minmax(240px,1fr))", marginTop: 16 }}>
@@ -188,7 +188,7 @@ export default function Agent() {
               <option value="grok">Grok</option>
             </select><br /><br />
             <label htmlFor="q"><strong>Your question</strong></label><br />
-            <input id="q" name="q" type="search" required maxLength={300} placeholder="e.g. maroon gown" style={{ ...inputStyle, width: "min(420px,100%)" }} />{" "}
+            <input id="q" name="q" type="search" data-voice-input="" required maxLength={300} placeholder="e.g. maroon gown" style={{ ...inputStyle, width: "min(420px,100%)" }} />{" "}
             <button type="submit" style={{ borderRadius: 999, padding: "10px 18px", fontWeight: 600, fontSize: 15, cursor: "pointer", background: "#0f4c4a", color: "#fff", border: "1px solid transparent" }}>Ask</button>
           </Form>
           {result && ("error" in result ? (
@@ -198,6 +198,7 @@ export default function Agent() {
           ))}
         </section>
       )}
+      <script src="/voice-mic.js" defer />
     </main>
   );
 }

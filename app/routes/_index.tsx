@@ -281,7 +281,7 @@ export default function Home() {
           <input type="hidden" name="tab" value="search" />
           {known && <input type="hidden" name="shop" value={shop} />}
           <label htmlFor="fabq"><strong>Search</strong></label><br />
-          <input id="fabq" name="q" type="search" required placeholder="e.g. ballerina" />{" "}
+          <input id="fabq" name="q" type="search" data-voice-input="" required placeholder="e.g. ballerina" />{" "}
           <button type="submit" className="btn btn-primary">Go</button>
         </Form>
         <p style={{ marginBottom: 0 }}>
@@ -291,6 +291,7 @@ export default function Home() {
           </small>
         </p>
       </div>
+      <script src="/voice-mic.js" defer />
     </main>
   );
 }
