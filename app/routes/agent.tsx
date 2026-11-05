@@ -1,5 +1,6 @@
 import { json, type ActionFunctionArgs, type LoaderFunctionArgs } from "@remix-run/node";
 import { Form, useActionData, useLoaderData } from "@remix-run/react";
+import type { ReactNode } from "react";
 import { callTool } from "~/lib/mcp/tools";
 import { db } from "~/lib/db";
 
@@ -123,6 +124,33 @@ export async function action({ request }: ActionFunctionArgs) {
 
 const inputStyle = { padding: "9px 12px", fontSize: 16, borderRadius: 8, border: "1px solid #e8e2da", color: "#141413", background: "#fff" } as const;
 
+// Model answers arrive as plain text with **bold** and bare PDP URLs.
+// Render them as elements (no HTML injection: text is never parsed as HTML).
+function rich(text: string): ReactNode[] {
+  const out: ReactNode[] = [];
+  const bold = (s: string, base: string): ReactNode[] => {
+    const b: ReactNode[] = [];
+    const re = /\*\*([^*]+)\*\*/g;
+    let l = 0, m: RegExpExecArray | null, j = 0;
+    while ((m = re.exec(s))) {
+      if (m.index > l) b.push(s.slice(l, m.index));
+      b.push(<strong key={`${base}-b${j++}`}>{m[1]}</strong>);
+      l = m.index + m[0].length;
+    }
+    if (l < s.length) b.push(s.slice(l));
+    return b;
+  };
+  const urlRe = /(https?:\/\/[^\s)]+)/g;
+  let last = 0, m: RegExpExecArray | null, k = 0;
+  while ((m = urlRe.exec(text))) {
+    if (m.index > last) out.push(...bold(text.slice(last, m.index), `t${k}`));
+    out.push(<a key={`u${k++}`} href={m[1]} target="_blank" rel="noreferrer">{m[1]}</a>);
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) out.push(...bold(text.slice(last), `t${k}`));
+  return out;
+}
+
 export default function Agent() {
   const { tab, q: sq, results, shop } = useLoaderData<typeof loader>();
   const result = useActionData<typeof action>();
@@ -175,7 +203,7 @@ export default function Agent() {
               {thread.map((m, i) => (
                 <div key={i} style={{ border: "1px solid #e8e2da", borderRadius: 12, padding: 12, background: m.role === "user" ? "#eef6f5" : "#fff" }}>
                   <p><strong>{m.role === "user" ? "You" : "Assistant"}:</strong></p>
-                  <p style={{ whiteSpace: "pre-wrap", margin: "4px 0 0" }}>{m.text}</p>
+                  <p style={{ whiteSpace: "pre-wrap", margin: "4px 0 0" }}>{rich(m.text)}</p>
                 </div>
               ))}
             </div>
