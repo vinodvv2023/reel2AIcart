@@ -39,6 +39,31 @@ describe("connect generate intent", () => {
     }, { calls: 1 });
   });
 
+  it("generate with a reference photo posts to edits with images[] and returns display fields", async () => {
+    await withFetch(() => jsonBody({ data: [{ b64_json: "QUJD" }] }), async (calls) => {
+      const { status, body } = await act(GEN);
+      assert.equal(status, 200);
+      assert.equal(body.ok, true);
+      assert.ok(String(calls[0].url).endsWith("/images/edits"));
+      assert.deepEqual(JSON.parse(calls[0].init.body).images, [{ image_url: "https://cdn/x.jpg" }]);
+      assert.equal(body.outputUrl, "data:image/webp;base64,QUJD");
+      assert.match(body.prompt, /Emerald Gown/);
+      assert.equal(body.endpoint, "edits");
+      assert.equal(body.referenceAttached, true);
+      assert.equal(typeof body.requestBody, "object");
+    }, { calls: 1 });
+  });
+
+  it("generate without a reference posts to generations with no images field", async () => {
+    await withFetch(() => jsonBody({ data: [{ url: "https://cdn/gen.jpg" }] }), async (calls) => {
+      const { status, body } = await act({ ...GEN, referenceImageUrl: "" });
+      assert.equal(status, 200);
+      assert.equal(body.sourceMode, "text-only");
+      assert.ok(String(calls[0].url).endsWith("/images/generations"));
+      assert.ok(!("images" in JSON.parse(calls[0].init.body)));
+    }, { calls: 1 });
+  });
+
   it("missing product is a readable 400 with picks intact (json, no redirect)", async () => {
     const { status, body } = await act({ ...GEN, productId: "" });
     assert.equal(status, 400);
@@ -121,6 +146,27 @@ describe("connect keep intent", () => {
     assert.match(body.error, /Nothing to keep/);
   });
 
+  const DATA_URI = "data:image/png;base64," + "QUJD".repeat(100);
+
+  it("keep stores a provider data URI as-is and dedupes the re-keep", async () => {
+    const first = await act({ ...KEEP, outputUrl: DATA_URI });
+    assert.equal(first.body.ok, true);
+    assert.equal(first.body.duplicate, false);
+    assert.equal(first.body.outputUrl, DATA_URI);
+    const second = await act({ ...KEEP, outputUrl: DATA_URI });
+    assert.equal(second.body.ok, true);
+    assert.equal(second.body.duplicate, true);
+    assert.equal(dbStubHolder.current.state.generated.length, 1);
+  });
+
+  it("keep rejects non-image data URIs and oversized payloads", async () => {
+    const bad = await act({ ...KEEP, outputUrl: "data:text/plain;base64,QUJD" });
+    assert.equal(bad.status, 400);
+    const big = await act({ ...KEEP, outputUrl: "data:image/png;base64," + "A".repeat(4_500_001) });
+    assert.equal(big.status, 400);
+    assert.match(big.body.error, /too large/i);
+  });
+
   it("keep with a bad source mode is a readable 400", async () => {
     const { status, body } = await act({ ...KEEP, sourceMode: "vibes" });
     assert.equal(status, 400);
@@ -143,6 +189,44 @@ describe("connect keep intent", () => {
       assert.equal(row.prompt_version, PROMPT_VERSION);
       assert.equal(row.provider, IMAGE_PROVIDER);
     });
+  });
+});
+
+describe("connect export intent", () => {
+  const EXPORT = {
+    intent: "export", productId: "42", style: "flat-lay",
+    productTitle: "Emerald Gown", confirm: "yes",
+    outputUrl: "data:image/png;base64," + "QUJD".repeat(100),
+  };
+
+  it("export uploads kept bytes to Files and upgrades the stored row", async () => {
+    const kept = await act({
+      intent: "keep", productId: "42", variantId: "7", style: "flat-lay",
+      outputUrl: EXPORT.outputUrl, sourceMode: "with-image",
+    });
+    assert.equal(kept.body.ok, true);
+    const staged = { data: { stagedUploadsCreate: { stagedTargets: [{ url: "https://up/x", resourceUrl: "https://files/y", parameters: [] }], userErrors: [] } } };
+    const created = { data: { fileCreate: { files: [{ url: "https://shop.cdn/files/kept.png" }], userErrors: [] } } };
+    await withFetch((url, init) => {
+      const u = String(url);
+      if (u.includes("/graphql.json") && String(init.body).includes("stagedUploadsCreate")) return jsonBody(staged);
+      if (u === "https://up/x") return new Response("ok", { status: 200 });
+      if (u.includes("/graphql.json")) return jsonBody(created);
+      throw new Error("unexpected fetch: " + u);
+    }, async () => {
+      const { status, body } = await act(EXPORT);
+      assert.equal(status, 200);
+      assert.equal(body.ok, true);
+      assert.equal(body.filesUrl, "https://shop.cdn/files/kept.png");
+      const [row] = dbStubHolder.current.state.generated;
+      assert.equal(row.output_url, "https://shop.cdn/files/kept.png");
+    }, { calls: 3 });
+  });
+
+  it("export without confirmation is a readable 400", async () => {
+    const { status, body } = await act({ ...EXPORT, confirm: "" });
+    assert.equal(status, 400);
+    assert.match(body.error, /confirmation/i);
   });
 });
 

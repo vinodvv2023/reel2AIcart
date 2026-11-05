@@ -187,7 +187,15 @@ function genErrorStatus(code: ImageErrorCode): number {
 function toGenResponse(res: GenerateSuccess | GenerateFailure) {
   if (!res.ok)
     return json({ intent: "generate" as const, ok: false as const, error: res.error.message }, { status: genErrorStatus(res.error.code) });
-  return json({ intent: "generate" as const, ok: true as const, outputUrl: res.outputUrl, sourceMode: res.sourceMode });
+  // Prompt + request shape ride along for the preview-time <details>
+  // disclosure (transparency only — no secret material: the Bearer key never
+  // leaves the server and is not part of requestBody).
+  return json({
+    intent: "generate" as const, ok: true as const, outputUrl: res.outputUrl,
+    sourceMode: res.sourceMode, prompt: res.prompt, endpoint: res.endpoint,
+    model: res.model, referenceAttached: res.referenceAttached,
+    requestBody: res.requestBody,
+  });
 }
 async function logGeneration(e: { shop: string; productId: string; variantId: string; style: string; outcome: "ok" | "failed"; cause: string }) {
   try {
@@ -253,8 +261,14 @@ async function keepAction(form: FormData) {
   const sourceMode = String(form.get("sourceMode") ?? "").trim();
   if (!productId || !isGenStyle(style) || !outputUrl)
     return json({ intent: "keep" as const, ok: false as const, error: "Nothing to keep — generate an image first." }, { status: 400 });
-  if (outputUrl.length > 4000 || (sourceMode !== "with-image" && sourceMode !== "text-only"))
+  // outputUrl is a data: URI straight from the provider (b64_json wrapped) or
+  // an https URL. Data URIs round-trip through the keep form, so the cap is
+  // the platform POST-body budget, not the old 4000-char URL heuristic.
+  const isDataUri = outputUrl.startsWith("data:image/");
+  if ((!isDataUri && !/^https?:\/\//i.test(outputUrl)) || (sourceMode !== "with-image" && sourceMode !== "text-only"))
     return json({ intent: "keep" as const, ok: false as const, error: "Kept image looks invalid — regenerate instead." }, { status: 400 });
+  if (outputUrl.length > 4_500_000)
+    return json({ intent: "keep" as const, ok: false as const, error: "Image too large to keep — regenerate, then push to Shopify Files." }, { status: 400 });
   try {
     const sql = db();
     const shops = (await sql`SELECT shop FROM shops LIMIT 1`) as { shop: string }[];
@@ -284,29 +298,52 @@ async function exportAction(form: FormData) {
     return json({ intent: "export" as const, ok: false as const, error: "Tick the confirmation box to push a copy to Shopify Files." }, { status: 400 });
   if (!productId || !isGenStyle(style) || !outputUrl)
     return json({ intent: "export" as const, ok: false as const, error: "Nothing to export — keep an image first." }, { status: 400 });
-  if (outputUrl.length > 4000)
+  if (outputUrl.length > 4_500_000)
     return json({ intent: "export" as const, ok: false as const, error: "Kept image looks invalid — regenerate instead." }, { status: 400 });
   try {
     const sql = db();
     const shops = (await sql`SELECT shop, access_token FROM shops LIMIT 1`) as { shop: string; access_token: string }[];
     if (!shops.length)
       return json({ intent: "export" as const, ok: false as const, error: "No shop installed yet." }, { status: 500 });
-    const filesUrl = await pushToFiles(shops[0].shop, shops[0].access_token, outputUrl, downloadName(title, style, outputUrl));
+    const { bytes, mime } = await fetchImageBytes(outputUrl);
+    const filesUrl = await uploadBytesToFiles(shops[0].shop, shops[0].access_token, bytes, mime, downloadName(title, style, outputUrl));
+    // Upgrade the stored row to the durable Files URL so history, downloads
+    // and future exports use the CDN copy (best-effort; export already won).
+    try {
+      await sql`UPDATE generated_images SET output_url = ${filesUrl}
+        WHERE shop = ${shops[0].shop} AND product_id = ${productId} AND style = ${style} AND output_url = ${outputUrl}`;
+    } catch {
+      // history keeps the previous URL; page still works (additive convention)
+    }
     return json({ intent: "export" as const, ok: true as const, filesUrl });
   } catch (e) {
     return json({ intent: "export" as const, ok: false as const, error: e instanceof Error ? e.message : "Files export failed — try again." }, { status: 502 });
   }
 }
 
-// T5 staged upload then fileCreate — Files only. Reuses the shops-token
-// pattern from shopProducts; no product-image mutation path exists here.
-async function pushToFiles(shop: string, token: string, outputUrl: string, filename: string): Promise<string> {
-  const img = await fetch(outputUrl);
+// Image bytes from either source we persist: provider data: URIs (decoded
+// locally — no fetch round-trip) or https URLs (fetched like before).
+function parseDataImageUri(uri: string): { mime: string; bytes: Uint8Array<ArrayBuffer> } {
+  const m = /^data:(image\/[a-z+]+);base64,([A-Za-z0-9+/=]+)$/.exec(uri);
+  if (!m) throw new Error("Kept image is not a valid image data URL — regenerate instead.");
+  const bytes = Uint8Array.from(atob(m[2]), (c) => c.charCodeAt(0));
+  if (bytes.length > 20_000_000) throw new Error("Image too large for Files (20 MB cap) — regenerate instead.");
+  return { mime: m[1], bytes };
+}
+async function fetchImageBytes(url: string): Promise<{ mime: string; bytes: Uint8Array<ArrayBuffer> }> {
+  if (url.startsWith("data:")) return parseDataImageUri(url);
+  const img = await fetch(url);
   if (!img.ok) throw new Error(`Could not fetch the kept image (status ${img.status}) — try again.`);
   const mime = (img.headers.get("content-type") ?? "").split(";")[0].trim() || "image/png";
   if (!mime.startsWith("image/")) throw new Error("Kept URL is not an image — regenerate instead.");
   const bytes = new Uint8Array(await img.arrayBuffer());
   if (bytes.length > 20_000_000) throw new Error("Image too large for Files (20 MB cap) — regenerate instead.");
+  return { mime, bytes };
+}
+
+// T5 staged upload then fileCreate — Files only. Reuses the shops-token
+// pattern from shopProducts; no product-image mutation path exists here.
+async function uploadBytesToFiles(shop: string, token: string, bytes: Uint8Array<ArrayBuffer>, mime: string, filename: string): Promise<string> {
   const gql = `https://${shop}/admin/api/2026-10/graphql.json`;
   const headers = { "X-Shopify-Access-Token": token, "Content-Type": "application/json" };
   const staged = (await (await fetch(gql, { method: "POST", headers,
@@ -351,10 +388,16 @@ const qs = (p: Record<string, string>) =>
 // ignored cross-origin, so it is omitted there).
 function downloadName(title: string, style: string, url: string): string {
   const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "product";
-  const ext = (/\.(png|jpe?g|webp|gif|avif)([?#]|$)/i.exec(url)?.[1] ?? "png").toLowerCase().replace("jpeg", "jpg");
+  // Data URIs carry no file extension — read the MIME type instead.
+  const dataMime = /^data:image\/([a-z+]+);/i.exec(url)?.[1]?.toLowerCase().replace("jpeg", "jpg");
+  const ext = dataMime ?? (/\.(png|jpe?g|webp|gif|avif)([?#]|$)/i.exec(url)?.[1] ?? "png").toLowerCase().replace("jpeg", "jpg");
   return `${slug}-${style}.${ext}`;
 }
 function dlProps(url: string, origin: string, name: string): { download?: string; target?: "_blank"; rel?: string } {
+  // Data URIs download from the document itself, so the download attribute
+  // works regardless of origin. Same-origin https also downloads directly;
+  // cross-origin degrades to open-in-new-tab (download would be ignored).
+  if (url.startsWith("data:image/")) return { download: name };
   try {
     if (new URL(url, origin).origin === origin) return { download: name };
   } catch {
@@ -572,6 +615,26 @@ export default function Connect() {
                 </a>
                 <figcaption><small>{genStyle} · {genResult.sourceMode === "with-image" ? "matched to product photo" : "interpreted from product name"}</small></figcaption>
                 <a className="btn btn-ghost" href={genResult.outputUrl} {...dlProps(genResult.outputUrl, origin, downloadName(selProduct.title, genStyle, genResult.outputUrl))} aria-label={`Download ${genStyle} image of ${selProduct.title}`}>Download</a>
+                <details style={{ marginTop: 8 }}>
+                  <summary><small>Prompt &amp; request details</small></summary>
+                  <p><small>
+                    Style <strong>{genStyle}</strong> · model <code>{genResult.model}</code> ·
+                    endpoint <code>POST /v1/images/{genResult.endpoint}</code> ·{" "}
+                    {genResult.referenceAttached ? "reference product photo attached" : "no reference photo (text-only)"} ·
+                    auth via server-only Bearer key (never shown).
+                  </small></p>
+                  {genResult.referenceAttached && selProduct.image && (
+                    <p><small>Reference: </small>
+                      <a href={selProduct.image} target="_blank" rel="noreferrer">
+                        <small>{selProduct.image.length > 90 ? selProduct.image.slice(0, 90) + "…" : selProduct.image}</small>
+                      </a>
+                    </p>
+                  )}
+                  <p><small>Prompt sent:</small></p>
+                  <pre style={{ whiteSpace: "pre-wrap", fontSize: 12 }}>{genResult.prompt}</pre>
+                  <p><small>Request body sent (auth header omitted):</small></p>
+                  <pre style={{ whiteSpace: "pre-wrap", fontSize: 12 }}>{JSON.stringify(genResult.requestBody, null, 2)}</pre>
+                </details>
               </figure>
             )}
             {genResult?.ok && !keepResult?.ok && (

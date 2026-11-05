@@ -93,6 +93,14 @@ export function makeDb() {
         }));
     }
     if (q.includes("INSERT INTO tag_events")) return [];
+    if (q.startsWith("UPDATE generated_images")) {
+      // Export upgrading the stored row to the Files URL.
+      const [filesUrl, shop, productId, style, outputUrl] = values;
+      const row = state.generated.find((r) => r.shop === shop && r.product_id === productId
+        && r.style === style && r.output_url === outputUrl);
+      if (row) row.output_url = filesUrl;
+      return [];
+    }
     throw new Error("unexpected query: " + q.slice(0, 80));
   };
   const sql = (s, ...v) => tag(s, ...v);

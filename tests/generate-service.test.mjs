@@ -6,7 +6,7 @@ import { loadService, withFetch, jsonBody } from "./helpers/route-harness.mjs";
 // Expected values come from the spec (issue #1): 6 styles, 5 error codes.
 const STYLES = ["flat-lay", "folded-stack", "single-folded", "ghost-mannequin", "hanger", "on-actor"];
 
-const { buildImagePrompt, generateImage, imagesGenerationsUrl, PROMPT_VERSION, IMAGE_PROVIDER } = loadService();
+const { buildImagePrompt, buildImageRequest, generateImage, imagesGenerationsUrl, imagesEditsUrl, PROMPT_VERSION, IMAGE_PROVIDER } = loadService();
 
 let savedEnv;
 beforeEach(() => {
@@ -41,6 +41,20 @@ describe("image service contract", () => {
 
   it("targets the images generations endpoint", () => {
     assert.match(imagesGenerationsUrl(), /\/images\/generations$/);
+    assert.match(imagesEditsUrl(), /\/images\/edits$/);
+  });
+
+  it("routes a reference photo to edits with images[], text-only to generations", () => {
+    const withRef = buildImageRequest({ title: "Gown", style: "flat-lay", referenceImageUrl: "https://cdn/x.jpg" });
+    assert.equal(withRef.endpoint, "edits");
+    assert.equal(withRef.url, imagesEditsUrl());
+    assert.equal(withRef.referenceAttached, true);
+    assert.deepEqual(withRef.body.images, [{ image_url: "https://cdn/x.jpg" }]);
+    const textOnly = buildImageRequest({ title: "Gown", style: "flat-lay" });
+    assert.equal(textOnly.endpoint, "generations");
+    assert.equal(textOnly.url, imagesGenerationsUrl());
+    assert.equal(textOnly.referenceAttached, false);
+    assert.ok(!("images" in textOnly.body));
   });
 
   it("returns no-keys without touching the network", async () => {
@@ -105,6 +119,42 @@ describe("image service contract", () => {
     assert.equal(PROMPT_VERSION, "v1");
     assert.equal(IMAGE_PROVIDER, "muse-image-1.0");
     assert.equal(kept[0].provider, IMAGE_PROVIDER);
+  });
+
+  it("wraps b64_json as a data URI using the echoed output format", async () => {
+    await withFetch(() => jsonBody({ data: [{ b64_json: "QUJD" }], output_format: "png" }), async () => {
+      const res = await generateImage({ shop: "s", productId: "1", title: "Gown", style: "flat-lay" });
+      assert.equal(res.ok, true);
+      assert.equal(res.outputUrl, "data:image/png;base64,QUJD");
+    });
+  });
+
+  it("prefers the url field when the provider returns one", async () => {
+    await withFetch(() => jsonBody({ data: [{ url: "https://cdn/gen.jpg", b64_json: "QUJD" }] }), async () => {
+      const res = await generateImage({ shop: "s", productId: "1", title: "Gown", style: "flat-lay" });
+      assert.equal(res.ok, true);
+      assert.equal(res.outputUrl, "https://cdn/gen.jpg");
+    });
+  });
+
+  it("success carries prompt, endpoint, model and request body for display", async () => {
+    let sent;
+    await withFetch((url, init) => {
+      sent = JSON.parse(init.body);
+      return jsonBody({ data: [{ b64_json: "QUJD" }] });
+    }, async (calls) => {
+      const res = await generateImage({
+        shop: "s", productId: "1", title: "Emerald Gown", variantTitle: "M",
+        style: "flat-lay", referenceImageUrl: "https://cdn/x.jpg",
+      });
+      assert.equal(res.ok, true);
+      assert.match(res.prompt, /Emerald Gown/);
+      assert.equal(res.endpoint, "edits");
+      assert.equal(res.model, "muse-image-1.0");
+      assert.equal(res.referenceAttached, true);
+      assert.deepEqual(res.requestBody, sent);
+      assert.ok(String(calls[0].url).endsWith("/images/edits"));
+    }, { calls: 1 });
   });
 
   it("never calls persist on failure and survives a persist throw", async () => {
