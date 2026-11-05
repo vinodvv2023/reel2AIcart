@@ -1,8 +1,9 @@
 import { json, type ActionFunctionArgs, type LoaderFunctionArgs } from "@remix-run/node";
-import { Form, useActionData, useLoaderData } from "@remix-run/react";
+import { Form, useActionData, useLoaderData, useNavigation } from "@remix-run/react";
 import { tagInstagram } from "~/lib/activation/instagram";
 import { humanizeCommerceError } from "~/lib/shopify/commerce-errors";
 import { db } from "~/lib/db";
+import { generateImage, type ImageStyle } from "~/lib/image/generate";
 
 // Tag-a-reel workspace: reels left, products right, review table above Tag.
 // All selection is URL state (?reel ?product ?variant) so the review table
@@ -12,6 +13,8 @@ type Reel = { id: string; caption?: string; thumbnail_url?: string; media_url?: 
 type Variant = { id: number; title: string; price: string };
 type Product = { id: number; title: string; image?: string; variants: Variant[] };
 const PER_PAGE = 8;
+const STYLES = ["flat-lay", "folded-stack", "single-folded", "ghost-mannequin", "hanger", "on-actor"] as const;
+const isGenStyle = (s: string): s is ImageStyle => (STYLES as readonly string[]).includes(s);
 
 async function igMedia(): Promise<{ reels: Reel[]; error: string | null }> {
   const token = process.env.META_GRAPH_TOKEN ?? "";
@@ -57,6 +60,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const productId = params.get("product") ?? "";
   const variantId = params.get("variant") ?? "";
   const reelId = params.get("reel") ?? "";
+  const rawStyle = params.get("style") ?? "";
+  const genStyle = isGenStyle(rawStyle) ? rawStyle : "";
   const pg = Math.max(1, parseInt(params.get("pg") ?? "1", 10) || 1);
   const rpg = Math.max(1, parseInt(params.get("rpg") ?? "1", 10) || 1);
   const [{ reels, error: reelsError }, { products, error: productsError }] = await Promise.all([
@@ -115,6 +120,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     productId,
     variantId: effVariant,
     reelId,
+    genStyle,
     selReel,
     selProduct,
     selVariant,
@@ -124,22 +130,54 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
 export async function action({ request }: ActionFunctionArgs) {
   const form = await request.formData();
+  if (String(form.get("intent") ?? "tag") === "generate") return generateAction(form);
   const mediaId = String(form.get("mediaId") ?? "").trim();
   const variantId = String(form.get("variantId") ?? "").trim();
   if (!mediaId || !variantId)
-    return json({ ok: false as const, error: "Pick a reel, product and variant above." }, { status: 400 });
+    return json({ intent: "tag" as const, ok: false as const, error: "Pick a reel, product and variant above." }, { status: 400 });
   const token = process.env.META_GRAPH_TOKEN ?? "";
   if (!token)
-    return json({ ok: false as const, error: "META_GRAPH_TOKEN missing in Vercel env." }, { status: 500 });
+    return json({ intent: "tag" as const, ok: false as const, error: "META_GRAPH_TOKEN missing in Vercel env." }, { status: 500 });
   try {
     await tagInstagram(mediaId, variantId, token);
     await logTag(mediaId, variantId, "ok", "");
-    return json({ ok: true as const, mediaId });
+    return json({ intent: "tag" as const, ok: true as const, mediaId });
   } catch (e) {
     const error = e instanceof Error ? e.message : "Tagging failed.";
     await logTag(mediaId, variantId, "failed", error);
-    return json({ ok: false as const, error });
+    return json({ intent: "tag" as const, ok: false as const, error });
   }
+}
+
+async function generateAction(form: FormData) {
+  const productId = String(form.get("productId") ?? "").trim();
+  const variantId = String(form.get("variantId") ?? "").trim();
+  const style = String(form.get("style") ?? "").trim();
+  if (!productId)
+    return json({ intent: "generate" as const, ok: false as const, error: "Pick a product above first, then choose a style and generate." }, { status: 400 });
+  if (!isGenStyle(style))
+    return json({ intent: "generate" as const, ok: false as const, error: "Pick one of the 6 styles above, then generate." }, { status: 400 });
+  const title = String(form.get("productTitle") ?? "").trim() || `Product ${productId}`;
+  const variantTitle = String(form.get("variantTitle") ?? "").trim();
+  const referenceImageUrl = String(form.get("referenceImageUrl") ?? "").trim();
+  let shop = "";
+  try {
+    const sql = db();
+    const shops = (await sql`SELECT shop FROM shops LIMIT 1`) as { shop: string }[];
+    shop = shops[0]?.shop ?? "";
+  } catch {
+    // shop label is best-effort; generation still proceeds
+  }
+  const res = await generateImage({
+    shop, productId, variantId, title, variantTitle, referenceImageUrl, style,
+    persist: async (r) => {
+      const sql = db();
+      await sql`INSERT INTO generated_images (shop, product_id, variant_id, style, prompt_version, source_mode, provider, output_url)
+        VALUES (${r.shop}, ${r.productId}, ${r.variantId}, ${r.style}, ${r.promptVersion}, ${r.sourceMode}, ${r.provider}, ${r.outputUrl})`;
+    },
+  });
+  if (!res.ok) return json({ intent: "generate" as const, ok: false as const, error: res.error.message }, { status: 502 });
+  return json({ intent: "generate" as const, ok: true as const, outputUrl: res.outputUrl, sourceMode: res.sourceMode });
 }
 
 async function logTag(mediaId: string, variantId: string, status: string, detail: string) {
@@ -158,10 +196,13 @@ const qs = (p: Record<string, string>) =>
 
 export default function Connect() {
   const { hint, ig, reels, reelsError, rTotal, rPage, rPages, products, productsError, total, page, pages,
-    q, rq, productId, variantId, reelId, selReel, selProduct, selVariant, taggedHere } =
+    q, rq, productId, variantId, reelId, genStyle, selReel, selProduct, selVariant, taggedHere } =
     useLoaderData<typeof loader>();
   const result = useActionData<typeof action>();
-  const keep = { q, rq, product: productId, variant: variantId, reel: reelId };
+  const nav = useNavigation();
+  const tagResult = result?.intent === "tag" ? result : null;
+  const genResult = result?.intent === "generate" ? result : null;
+  const keep = { q, rq, product: productId, variant: variantId, reel: reelId, style: genStyle };
   const complete = Boolean(selReel && selVariant);
   return (
     <main className="r2ac-wrap">
@@ -320,8 +361,50 @@ export default function Connect() {
         </section>
       </div>
 
+      <section className="r2ac-card" style={{ marginTop: 20 }} aria-label="Generate product image">
+        <h2>3. Generate product image <small>(optional)</small></h2>
+        {!selProduct ? (
+          <p><small>Pick a product above to unlock image generation.</small></p>
+        ) : (
+          <>
+            <p><small>Styles keep your picks — switching never loses ?reel ?product ?variant. Generation can take up to a minute.</small></p>
+            <div role="list" aria-label="Image styles" style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 8 }}>
+              {STYLES.map((s) => (
+                <a key={s} role="listitem" href={qs({ ...keep, style: s })}
+                  aria-current={s === genStyle || undefined} className="btn btn-ghost"
+                  style={s === genStyle ? { border: "2px solid #0f4c4a" } : undefined}>
+                  {s === genStyle ? "✓ " : ""}{s}
+                </a>
+              ))}
+            </div>
+            <Form method="post" aria-label="Generate product image" style={{ marginTop: 12 }}>
+              <input type="hidden" name="intent" value="generate" />
+              <input type="hidden" name="productId" value={productId} />
+              <input type="hidden" name="variantId" value={variantId} />
+              <input type="hidden" name="style" value={genStyle} />
+              <input type="hidden" name="productTitle" value={selProduct.title} />
+              <input type="hidden" name="variantTitle" value={selVariant?.title ?? ""} />
+              <input type="hidden" name="referenceImageUrl" value={selProduct.image ?? ""} />
+              <button type="submit" className="btn btn-primary" disabled={!genStyle || nav.state !== "idle"}>
+                {nav.state !== "idle" ? "Generating…" : genResult?.ok ? "Regenerate image" : "Generate image"}
+              </button>
+              {!genStyle && <p><small>Pick a style above to enable generation.</small></p>}
+            </Form>
+            {nav.state !== "idle" && <p role="status"><small>Generating your image — this can take up to a minute…</small></p>}
+            {genResult?.ok && (
+              <figure style={{ marginTop: 12 }}>
+                <img src={genResult.outputUrl} alt={`Generated ${genStyle} image of ${selProduct.title}`}
+                  loading="lazy" style={{ maxWidth: "100%", height: "auto", borderRadius: 8 }} />
+                <figcaption><small>{genStyle} · {genResult.sourceMode === "with-image" ? "matched to product photo" : "interpreted from product name"}</small></figcaption>
+              </figure>
+            )}
+          </>
+        )}
+        {genResult && !genResult.ok && <p role="alert" className="r2ac-err">{genResult.error}</p>}
+      </section>
+
       <section className="r2ac-card" style={{ marginTop: 20 }} aria-label="Review and tag">
-        <h2>3. Review and tag</h2>
+        <h2>4. Review and tag</h2>
         {(selReel || selProduct || selVariant) ? (
           <>
             <table style={{ borderCollapse: "collapse", width: "100%", marginTop: 8 }}>
@@ -355,6 +438,7 @@ export default function Connect() {
         ) : null}
         {complete ? (
           <Form method="post" aria-label="Tag products on the selected reel" style={{ marginTop: 12 }}>
+            <input type="hidden" name="intent" value="tag" />
             <input type="hidden" name="mediaId" value={reelId} />
             <input type="hidden" name="variantId" value={variantId} />
             <button type="submit" className="btn btn-primary">Tag products on reel</button>
@@ -364,9 +448,9 @@ export default function Connect() {
             <button type="button" className="btn btn-primary" disabled>Pick a reel, product and variant above</button>
           </p>
         )}
-        {result && (
-          <p role={result.ok ? "status" : "alert"} className={result.ok ? "r2ac-ok" : "r2ac-err"}>
-            {result.ok ? `Tagged reel ${result.mediaId} - check the reel on mobile for View Products.` : result.error}
+        {tagResult && (
+          <p role={tagResult.ok ? "status" : "alert"} className={tagResult.ok ? "r2ac-ok" : "r2ac-err"}>
+            {tagResult.ok ? `Tagged reel ${tagResult.mediaId} - check the reel on mobile for View Products.` : tagResult.error}
           </p>
         )}
       </section>
